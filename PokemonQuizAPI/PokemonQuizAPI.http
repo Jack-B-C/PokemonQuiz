@@ -1,0 +1,6 @@
+@PokemonQuizAPI_HostAddress = http://localhost:5168
+
+GET {{PokemonQuizAPI_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
