@@ -1,6 +1,6 @@
 ﻿import React, { useRef, useEffect, useState } from "react";
 import { View, Text, StyleSheet, Animated, Dimensions, TouchableOpacity } from "react-native";
-import { colors } from "../styles/colours";
+import { colors } from "../../styles/colours";
 import Icon from 'react-native-vector-icons/Ionicons';
 
 // Get the screen width and height (used for responsive layout)
