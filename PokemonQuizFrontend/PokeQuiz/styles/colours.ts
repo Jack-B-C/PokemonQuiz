@@ -9,4 +9,13 @@ export const colors = {
     text: "#212121",
     muted: "#B0B0B0",
     white: "#FFFFFF", 
+    grey: "#808080",
+    error: "#ef4444",
+
+    "HP": "#22c55e",             // green
+    "Attack": "#ef4444",         // red
+    "Defence": "#f97316",        // orange
+    "Special Attack": "#ec4899", // pink
+    "Special Defence": "#8b5cf6",// purple
+    "Speed": "#3b82f6",
 };

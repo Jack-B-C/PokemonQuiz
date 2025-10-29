@@ -1,9 +1,7 @@
-﻿// app/index.tsx
-import React, { useRef, useEffect, useState } from "react";
+﻿import React, { useRef, useEffect } from "react";
 import { View, Text, StyleSheet, Animated, Dimensions, TouchableOpacity } from "react-native";
 import { colors } from "../styles/colours";
 import Icon from "react-native-vector-icons/Ionicons";
-import Navbar from "../components/Navbar";
 import { useRouter } from "expo-router";
 
 const { height: screenHeight } = Dimensions.get("window");
@@ -31,8 +29,6 @@ export default function HomeScreen() {
 
     return (
         <View style={styles.safeArea}>
-            <Navbar title="PokéQuiz Home" />
-
             <View style={styles.container}>
                 <View style={styles.topHalf}>
                     <Text style={styles.title}>PokéQuiz</Text>
@@ -47,7 +43,7 @@ export default function HomeScreen() {
                 <Animated.View style={[styles.playButtonWrapper, { transform: [{ scale: pulseAnim }] }]}>
                     <TouchableOpacity
                         style={styles.circleButton}
-                        onPress={() => router.push("/pages/mode")}
+                        onPress={() => router.push("/pages/Mode")}
                         activeOpacity={0.8}
                     >
                         <Text style={styles.playButtonText}>Play</Text>
@@ -57,7 +53,7 @@ export default function HomeScreen() {
                 <TouchableOpacity
                     style={styles.loginButton}
                     activeOpacity={0.7}
-                    onPress={() => router.push("/pages/mode")}
+                    onPress={() => router.push("/pages/Mode")}
                 >
                     <Icon name="person-circle-outline" size={40} color={colors.primary} />
                 </TouchableOpacity>
@@ -65,7 +61,7 @@ export default function HomeScreen() {
                 <TouchableOpacity
                     style={styles.leaderboardButton}
                     activeOpacity={0.7}
-                    onPress={() => router.push("/pages/mode")}
+                    onPress={() => router.push("/pages/Mode")}
                 >
                     <Icon name="bar-chart-outline" size={40} color={colors.white} />
                 </TouchableOpacity>
