@@ -2,16 +2,19 @@ using Microsoft.AspNetCore.Mvc;
 using PokemonQuizAPI.Data;
 using PokemonQuizAPI.Models;
 using System.Text.Json;
+using Microsoft.AspNetCore.SignalR;
+using PokemonQuizAPI.Hubs;
 
 namespace PokemonQuizAPI.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
-    public class SeedController(DatabaseHelper db, ILogger<SeedController> logger) : ControllerBase
+    public class SeedController(DatabaseHelper db, ILogger<SeedController> logger, IHubContext<GameHub> hubContext) : ControllerBase
     {
         private readonly DatabaseHelper _db = db;
         private readonly ILogger<SeedController> _logger = logger;
         private readonly HttpClient _httpClient = new();
+        private readonly IHubContext<GameHub> _hubContext = hubContext;
 
         [HttpPost("pokemon")]
         [HttpGet("pokemon")]  // Allow GET for easy browser testing
@@ -57,6 +60,16 @@ namespace PokemonQuizAPI.Controllers
                         _logger.LogError(ex, "Failed to seed Pokémon #{Number}", i);
                         failedCount++;
                     }
+                }
+
+                // Notify connected SignalR clients that Pokemon data has been seeded
+                try
+                {
+                    await _hubContext.Clients.All.SendAsync("PokemonDataSeeded", new { seeded = seededCount, failed = failedCount, total = count });
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to broadcast PokemonDataSeeded event");
                 }
 
                 return Ok(new

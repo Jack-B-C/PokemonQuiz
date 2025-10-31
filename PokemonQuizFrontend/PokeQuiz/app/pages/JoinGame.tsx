@@ -8,56 +8,35 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 export default function JoinGame() {
     const router = useRouter();
     const params = useLocalSearchParams();
-    const roomCodeFromParams = params.roomCode as string || "";
+    const roomCode = params.roomCode as string;
 
-    const [roomCode, setRoomCode] = useState(roomCodeFromParams);
     const [playerName, setPlayerName] = useState("");
 
     const handleJoin = () => {
-        if (!roomCode.trim()) {
-            Alert.alert("Error", "Please enter a room code");
-            return;
-        }
         if (!playerName.trim()) {
             Alert.alert("Error", "Please enter your name");
             return;
         }
 
-        // Navigate to waiting room
         router.push({
             pathname: "/pages/WaitingRoom",
-            params: {
-                roomCode: roomCode.toUpperCase(),
-                playerName: playerName.trim()
-            }
+            params: { roomCode, playerName },
         });
     };
 
     return (
         <View style={styles.container}>
-            <Navbar title="Join Game" />
+            <Navbar title="Join Room" />
             <View style={styles.content}>
-                <Text style={styles.title}>Join a Game</Text>
-
+                <Text style={styles.roomLabel}>ROOM: {roomCode}</Text>
+                <Text style={styles.subtitle}>Enter your name to join</Text>
                 <TextInput
-                    style={styles.input}
-                    placeholder="Room Code"
-                    placeholderTextColor="#999"
-                    value={roomCode}
-                    onChangeText={(text) => setRoomCode(text.toUpperCase())}
-                    maxLength={6}
-                    autoCapitalize="characters"
-                />
-
-                <TextInput
-                    style={styles.input}
+                    style={styles.nameInput}
                     placeholder="Your Name"
                     placeholderTextColor="#999"
                     value={playerName}
                     onChangeText={setPlayerName}
-                    maxLength={20}
                 />
-
                 <AppButton label="Join Room" onPress={handleJoin} />
             </View>
         </View>
@@ -65,29 +44,9 @@ export default function JoinGame() {
 }
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: colors.background || "#151515",
-    },
-    content: {
-        flex: 1,
-        justifyContent: "center",
-        alignItems: "center",
-        padding: 20,
-    },
-    title: {
-        fontSize: 30,
-        fontWeight: "800",
-        color: colors.white,
-        marginBottom: 40,
-    },
-    input: {
-        width: "80%",
-        backgroundColor: colors.white,
-        padding: 15,
-        borderRadius: 10,
-        fontSize: 18,
-        marginBottom: 20,
-        textAlign: "center",
-    },
+    container: { flex: 1, backgroundColor: "#ffffff" },
+    content: { flex: 1, justifyContent: "center", alignItems: "center", padding: 20 },
+    roomLabel: { fontSize: 36, fontWeight: "900", color: "#FF5252", marginBottom: 15 },
+    subtitle: { fontSize: 18, color: "#666", marginBottom: 20 },
+    nameInput: { width: "80%", padding: 15, borderRadius: 12, fontSize: 18, marginBottom: 20, textAlign: "center", borderWidth: 2, borderColor: "#FF5252" },
 });

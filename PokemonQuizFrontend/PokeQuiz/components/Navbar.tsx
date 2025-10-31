@@ -13,9 +13,14 @@ export default function Navbar({ title, onBack }: Props) {
     const handleBack = () => {
         if (onBack) {
             onBack();
-        } else if (router.canGoBack()) {
-            router.back();
-        } else {
+            return;
+        }
+
+        // Default: navigate to game selection to avoid returning to previous question state
+        try {
+            router.replace('/pages/ChooseGame');
+        } catch {
+            // Fallback to root if replace fails
             router.push('/');
         }
     };

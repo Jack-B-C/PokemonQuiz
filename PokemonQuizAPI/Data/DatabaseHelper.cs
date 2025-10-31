@@ -119,6 +119,126 @@ namespace PokemonQuizAPI.Data
             }
         }
 
+        /// <summary>
+        /// Insert a new game room into the GameRoom table.
+        /// hostUserId and gameId are optional and will be saved as NULL when not provided.
+        /// </summary>
+        public async Task<bool> InsertGameRoomAsync(string roomCode, string? hostUserId = null, string? gameId = null)
+        {
+            try
+            {
+                await using var conn = await GetConnectionAsync();
+                await using var cmd = new MySqlCommand(@"
+                    INSERT INTO GameRoom (id, game_id, host_user_id, room_code, is_active, created_at)
+                    VALUES (@id, @game_id, @host_user_id, @room_code, @is_active, @created_at)", conn);
+
+                cmd.Parameters.AddWithValue("@id", Guid.NewGuid().ToString());
+                cmd.Parameters.AddWithValue("@game_id", gameId ?? (object)DBNull.Value);
+                cmd.Parameters.AddWithValue("@host_user_id", hostUserId ?? (object)DBNull.Value);
+                cmd.Parameters.AddWithValue("@room_code", roomCode.ToUpper());
+                cmd.Parameters.AddWithValue("@is_active", true);
+                cmd.Parameters.AddWithValue("@created_at", DateTime.UtcNow);
+
+                var rowsAffected = await cmd.ExecuteNonQueryAsync();
+                _logger.LogInformation("Inserted GameRoom {RoomCode} into database", roomCode);
+                return rowsAffected > 0;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error inserting GameRoom: {RoomCode}", roomCode);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Returns true if an active GameRoom with the given room code exists (is_active = 1)
+        /// </summary>
+        public async Task<bool> GameRoomExistsAsync(string roomCode)
+        {
+            try
+            {
+                await using var conn = await GetConnectionAsync();
+                await using var cmd = new MySqlCommand("SELECT COUNT(*) FROM GameRoom WHERE TRIM(room_code) = @code AND is_active = 1", conn);
+                cmd.Parameters.AddWithValue("@code", roomCode.ToUpper().Trim());
+
+                var count = await cmd.ExecuteScalarAsync();
+                return Convert.ToInt32(count) > 0;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error checking existence of GameRoom: {RoomCode}", roomCode);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Get the game_id for a GameRoom by room code (trimmed).
+        /// Returns null if not found or inactive.
+        /// </summary>
+        public async Task<string?> GetGameIdForRoomAsync(string roomCode)
+        {
+            try
+            {
+                await using var conn = await GetConnectionAsync();
+                await using var cmd = new MySqlCommand("SELECT game_id FROM GameRoom WHERE TRIM(room_code) = @code AND is_active = 1 LIMIT 1", conn);
+                cmd.Parameters.AddWithValue("@code", roomCode.ToUpper().Trim());
+
+                var result = await cmd.ExecuteScalarAsync();
+                if (result == null || result == DBNull.Value) return null;
+                return result.ToString();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error fetching game id for room {RoomCode}", roomCode);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Update the game_id stored for a GameRoom by room code (trimmed). Returns true if updated.
+        /// </summary>
+        public async Task<bool> UpdateGameRoomGameIdAsync(string roomCode, string gameId)
+        {
+            try
+            {
+                await using var conn = await GetConnectionAsync();
+                await using var cmd = new MySqlCommand("UPDATE GameRoom SET game_id = @gameId WHERE TRIM(room_code) = @code AND is_active = 1", conn);
+                cmd.Parameters.AddWithValue("@gameId", gameId);
+                cmd.Parameters.AddWithValue("@code", roomCode.ToUpper().Trim());
+
+                var rows = await cmd.ExecuteNonQueryAsync();
+                _logger.LogInformation("Updated GameRoom {RoomCode} with game {GameId}", roomCode, gameId);
+                return rows > 0;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error updating game id for GameRoom: {RoomCode}", roomCode);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Mark a GameRoom as ended by setting is_active = 0.
+        /// </summary>
+        public async Task<bool> EndGameRoomAsync(string roomCode)
+        {
+            try
+            {
+                await using var conn = await GetConnectionAsync();
+                await using var cmd = new MySqlCommand("UPDATE GameRoom SET is_active = 0 WHERE TRIM(room_code) = @code AND is_active = 1", conn);
+                cmd.Parameters.AddWithValue("@code", roomCode.ToUpper().Trim());
+
+                var rowsAffected = await cmd.ExecuteNonQueryAsync();
+                _logger.LogInformation("Marked GameRoom {RoomCode} ended in database", roomCode);
+                return rowsAffected > 0;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error ending GameRoom: {RoomCode}", roomCode);
+                throw;
+            }
+        }
+
         private static PokemonData MapPokemonData(MySqlDataReader reader)
         {
             return new PokemonData

@@ -6,7 +6,37 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 
 export default function GameOver() {
     const router = useRouter();
-    const params = useLocalSearchParams<{ score: string; total: string }>();
+    const params = useLocalSearchParams();
+
+    // If leaderboard param provided (multiplayer), it will be a JSON string
+    const leaderboardJson = params.leaderboard as string | undefined;
+
+    if (leaderboardJson) {
+        let leaderboard: { Name?: string; name?: string; Score?: number; score?: number }[] = [];
+        try {
+            leaderboard = JSON.parse(leaderboardJson);
+        } catch (e) {
+            console.warn('Failed to parse leaderboard', e);
+        }
+
+        return (
+            <View style={styles.container}>
+                <Text style={styles.title}>🏆 Lobby Leaderboard</Text>
+                <View style={{ width: '100%', paddingHorizontal: 20 }}>
+                    {leaderboard.map((p, i) => (
+                        <Text key={i} style={styles.leaderText}>{i + 1}. {p.Name ?? p.name}: {p.Score ?? p.score}</Text>
+                    ))}
+                </View>
+
+                <AppButton
+                    label="Back to Menu"
+                    onPress={() => router.replace({ pathname: "/pages/ChooseGame" })}
+                    backgroundColor={colors.primaryDark || "#666"}
+                    style={styles.button}
+                />
+            </View>
+        );
+    }
 
     const score = Number(params.score ?? 0);
     const total = Number(params.total ?? 0);
@@ -61,4 +91,9 @@ const styles = StyleSheet.create({
         paddingVertical: 16,
         borderRadius: 12,
     },
+    leaderText: {
+        fontSize: 18,
+        color: colors.text || '#fff',
+        marginVertical: 6,
+    }
 });

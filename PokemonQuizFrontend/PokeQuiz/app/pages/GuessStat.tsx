@@ -4,8 +4,8 @@ import {
     Text,
     StyleSheet,
     Image,
-    ActivityIndicator,
     Platform,
+    ActivityIndicator,
 } from "react-native";
 import { colors } from "../../styles/colours";
 import Navbar from "@/components/Navbar";
@@ -31,68 +31,79 @@ export default function PokemonStatGame() {
     const [isLoading, setIsLoading] = useState(false);
     const [score, setScore] = useState(0);
     const [totalQuestions, setTotalQuestions] = useState(0);
-    const [usedPokemons, setUsedPokemons] = useState<string[]>([]);
-    const [selectedValue, setSelectedValue] = useState<number | null>(null);
-    const [showAnswer, setShowAnswer] = useState(false);
+    const [usedPokemonNames, setUsedPokemonNames] = useState<Set<string>>(new Set());
+    const [selectedAnswer, setSelectedAnswer] = useState<number | null>(null);
+    const [showResult, setShowResult] = useState(false);
+    const [isCorrect, setIsCorrect] = useState(false);
     const [options, setOptions] = useState<StatOption[]>([]);
 
     const router = useRouter();
     const serverIp = Platform.OS === "android" ? "10.0.2.2" : "localhost";
     const MAX_QUESTIONS = 10;
 
+    // Add explicit back handler that replaces navigation to ChooseGame
+    const handleBack = () => {
+        // Navigate to game selection and reset stack so back won't return to quiz
+        router.replace('/pages/ChooseGame');
+    };
+
     const fetchRandomPokemon = async () => {
         setIsLoading(true);
-        setShowAnswer(false);
-        setSelectedValue(null);
+        setSelectedAnswer(null);
+        setShowResult(false);
+
         try {
             const res = await fetch(`http://${serverIp}:5168/api/game/random`);
-            if (!res.ok) throw new Error(`Server returned ${res.status}`);
+
+            if (!res.ok) {
+                throw new Error(`Server returned ${res.status}`);
+            }
+
             const data = await res.json();
 
-            if (usedPokemons.includes(data.pokemonName)) {
+            // Check if we've already shown this Pokémon
+            if (usedPokemonNames.has(data.pokemonName)) {
+                console.log('Duplicate Pokémon, fetching another...');
                 await fetchRandomPokemon();
                 return;
             }
 
+            // Shuffle options ONCE when data is loaded
+            const shuffledOptions = [
+                { stat: data.statToGuess, value: data.correctValue },
+                ...data.otherValues,
+            ].sort(() => Math.random() - 0.5);
+
+            setOptions(shuffledOptions);
             setPokemonData(data);
-            setUsedPokemons([...usedPokemons, data.pokemonName]);
+            setUsedPokemonNames(prev => new Set([...prev, data.pokemonName]));
         } catch (err) {
             console.error(err);
+            alert("Failed to fetch Pokémon from server. Make sure the API is running!");
         } finally {
             setIsLoading(false);
         }
     };
 
     useEffect(() => {
-        if (pokemonData) {
-            const shuffled = [
-                { stat: pokemonData.statToGuess, value: pokemonData.correctValue },
-                ...pokemonData.otherValues,
-            ].sort(() => Math.random() - 0.5);
-            setOptions(shuffled);
-        }
-    }, [pokemonData]);
-
-    useEffect(() => {
         fetchRandomPokemon();
     }, []);
 
-    const endGame = () => {
-        // Use object syntax for Expo Router to pass query params
-        router.push({
-            pathname: "/pages/GameOver",
-            params: { score: score.toString(), total: MAX_QUESTIONS.toString() },
-        });
-    };
-
     const checkAnswer = async (value: number) => {
-        if (!pokemonData || showAnswer) return;
+        if (!pokemonData || selectedAnswer !== null) return;
 
-        setSelectedValue(value);
-        setShowAnswer(true);
+        setSelectedAnswer(value);
+        setTotalQuestions(prev => prev + 1);
+
         const correct = value === pokemonData.correctValue;
-        if (correct) setScore((prev) => prev + 1);
+        setIsCorrect(correct);
+        setShowResult(true);
 
+        if (correct) {
+            setScore(prev => prev + 1);
+        }
+
+        // Play sound
         try {
             const { sound } = await Audio.Sound.createAsync(
                 correct
@@ -101,65 +112,74 @@ export default function PokemonStatGame() {
             );
             await sound.playAsync();
             sound.setOnPlaybackStatusUpdate((status) => {
-                if (status.isLoaded && status.didJustFinish) sound.unloadAsync();
+                if (status.isLoaded && status.didJustFinish) {
+                    sound.unloadAsync();
+                }
             });
         } catch (error) {
             console.warn("Sound playback failed", error);
         }
 
-        setTotalQuestions((prev) => prev + 1);
-
-        setTimeout(() => {
+        // Auto-advance after 2 seconds
+        setTimeout(async () => {
             const nextQuestion = totalQuestions + 1;
             if (nextQuestion >= MAX_QUESTIONS) {
-                endGame();
+                // End game
+                router.push({
+                    pathname: "/pages/GameOver",
+                    params: {
+                        score: (score + (correct ? 1 : 0)).toString(),
+                        total: MAX_QUESTIONS.toString()
+                    }
+                } as any);
             } else {
-                fetchRandomPokemon();
+                await fetchRandomPokemon();
             }
-        }, 1000);
+        }, 2000);
     };
 
     if (isLoading && !pokemonData) {
         return (
             <View style={styles.container}>
-                <Navbar title="Guess Pokémon Stat" />
-                <ActivityIndicator size="large" color={colors.primary || "#3b82f6"} />
+                <Navbar title="Guess Pokémon Stat" onBack={handleBack} />
+                <View style={styles.content}>
+                    <ActivityIndicator size="large" color={colors.primary || "#3b82f6"} />
+                    <Text style={styles.loadingText}>Loading Pokémon...</Text>
+                </View>
             </View>
         );
     }
 
-    if (!pokemonData) {
+    if (!pokemonData || options.length === 0) {
         return (
             <View style={styles.container}>
-                <Navbar title="Guess Pokémon Stat" />
-                <Text style={styles.errorText}>Failed to load Pokémon data</Text>
-                <AppButton label="Retry" onPress={fetchRandomPokemon} style={styles.retryButton} />
+                <Navbar title="Guess Pokémon Stat" onBack={handleBack} />
+                <View style={styles.content}>
+                    <Text style={styles.errorText}>Failed to load Pokémon data</Text>
+                    <AppButton
+                        label="Retry"
+                        onPress={fetchRandomPokemon}
+                        style={styles.retryButton}
+                    />
+                </View>
             </View>
         );
     }
 
     return (
         <View style={styles.container}>
-            <Navbar title="Guess Pokémon Stat" />
+            <Navbar title="Guess Pokémon Stat" onBack={handleBack} />
 
+            {/* Score Display */}
             <View style={styles.scoreContainer}>
                 <Text style={styles.scoreText}>
-                    {totalQuestions}/{MAX_QUESTIONS} questions
+                    Question {totalQuestions + 1}/{MAX_QUESTIONS} | Score: {score}
                 </Text>
-                <AppButton
-                    label="Give Up"
-                    onPress={endGame}
-                    style={styles.giveUpButton}
-                />
             </View>
 
             <View style={styles.content}>
                 <Text style={styles.title}>
-                    What is {pokemonData.pokemonName}'s{"\n"}
-                    <Text style={{ color: colors[pokemonData.statToGuess as keyof typeof colors] }}>
-                        {pokemonData.statToGuess}
-                    </Text>
-                    ?
+                    What is {pokemonData.pokemonName}{"'"}s{"\n"}{pokemonData.statToGuess}?
                 </Text>
 
                 <Image
@@ -168,15 +188,36 @@ export default function PokemonStatGame() {
                     resizeMode="contain"
                 />
 
+                {/* Result Feedback Banner */}
+                {showResult && (
+                    <View style={[
+                        styles.resultBanner,
+                        isCorrect ? styles.correctBanner : styles.incorrectBanner
+                    ]}>
+                        <Text style={styles.resultEmoji}>
+                            {isCorrect ? "🎉" : "❌"}
+                        </Text>
+                        <Text style={styles.resultText}>
+                            {isCorrect
+                                ? "Correct!"
+                                : `Wrong! It's ${pokemonData.correctValue}`
+                            }
+                        </Text>
+                    </View>
+                )}
+
                 <View style={styles.optionsContainer}>
                     {options.map((item, index) => {
-                        let bgColor = colors.primary || "#3b82f6";
-                        if (showAnswer) {
-                            if (item.value === pokemonData.correctValue) {
-                                bgColor = "#22c55e";
-                            } else if (item.value === selectedValue) {
-                                bgColor = "#ef4444";
-                            }
+                        const isSelected = selectedAnswer === item.value;
+                        const isCorrectOption = item.value === pokemonData.correctValue;
+                        const showCorrect = showResult && isCorrectOption;
+                        const showIncorrect = showResult && isSelected && !isCorrect;
+
+                        let buttonStyle = styles.optionButton;
+                        if (showCorrect) {
+                            buttonStyle = { ...styles.optionButton, ...styles.correctButton };
+                        } else if (showIncorrect) {
+                            buttonStyle = { ...styles.optionButton, ...styles.incorrectButton };
                         }
 
                         return (
@@ -184,28 +225,111 @@ export default function PokemonStatGame() {
                                 key={`${item.value}-${index}`}
                                 label={`${item.value}`}
                                 onPress={() => checkAnswer(item.value)}
-                                backgroundColor={bgColor}
-                                disabled={showAnswer}
-                                style={styles.optionButton}
+                                style={buttonStyle}
+                                disabled={selectedAnswer !== null}
                             />
                         );
                     })}
                 </View>
+
+                {/* Progress indicator */}
+                <Text style={styles.progressText}>
+                    Unique Pokémon seen: {usedPokemonNames.size}
+                </Text>
             </View>
         </View>
     );
 }
 
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: colors.background || "#151515" },
-    content: { flex: 1, justifyContent: "center", alignItems: "center", padding: 20 },
-    scoreContainer: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, marginVertical: 10 },
-    scoreText: { fontSize: 18, fontWeight: "700", color: "#fff" },
-    giveUpButton: { width: 100, paddingVertical: 6 },
-    title: { fontSize: 26, fontWeight: "700", marginBottom: 20, textAlign: "center", color: colors.text || "#fff" },
-    pokemonImage: { width: 220, height: 220, marginBottom: 20 },
-    optionsContainer: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", width: "100%", maxWidth: 400 },
-    optionButton: { width: "48%", paddingVertical: 20, marginBottom: 12, borderRadius: 12, alignItems: "center", justifyContent: "center" },
-    errorText: { fontSize: 18, color: colors.error || "#ef4444", marginBottom: 20, textAlign: "center" },
-    retryButton: { width: "80%" },
+    container: {
+        flex: 1,
+        backgroundColor: colors.background || "#151515"
+    },
+    content: {
+        flex: 1,
+        justifyContent: "center",
+        alignItems: "center",
+        padding: 20
+    },
+    scoreContainer: {
+        backgroundColor: colors.primary || "#3b82f6",
+        padding: 16,
+        alignItems: "center",
+    },
+    scoreText: {
+        fontSize: 18,
+        fontWeight: "700",
+        color: "#fff",
+    },
+    title: {
+        fontSize: 24,
+        fontWeight: "700",
+        marginBottom: 20,
+        textAlign: "center",
+        color: colors.text || "#fff",
+    },
+    pokemonImage: {
+        width: 200,
+        height: 200,
+        marginBottom: 20
+    },
+    resultBanner: {
+        flexDirection: "row",
+        alignItems: "center",
+        padding: 16,
+        borderRadius: 12,
+        marginBottom: 20,
+        minWidth: "80%",
+        justifyContent: "center",
+    },
+    correctBanner: {
+        backgroundColor: "#10b981",
+    },
+    incorrectBanner: {
+        backgroundColor: "#ef4444",
+    },
+    resultEmoji: {
+        fontSize: 32,
+        marginRight: 12,
+    },
+    resultText: {
+        fontSize: 20,
+        fontWeight: "700",
+        color: "#fff",
+    },
+    optionsContainer: {
+        width: "100%",
+        maxWidth: 400,
+        gap: 12,
+    },
+    optionButton: {
+        width: "100%",
+        paddingVertical: 16,
+    },
+    correctButton: {
+        backgroundColor: "#10b981",
+    },
+    incorrectButton: {
+        backgroundColor: "#ef4444",
+    },
+    progressText: {
+        marginTop: 20,
+        fontSize: 14,
+        color: "#9ca3af",
+    },
+    loadingText: {
+        marginTop: 16,
+        fontSize: 16,
+        color: colors.text || "#fff",
+    },
+    errorText: {
+        fontSize: 18,
+        color: colors.error || "#ef4444",
+        marginBottom: 20,
+        textAlign: "center",
+    },
+    retryButton: {
+        width: "80%",
+    },
 });
