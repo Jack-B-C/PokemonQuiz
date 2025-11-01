@@ -1,12 +1,18 @@
 ﻿import React from "react";
 import { View, Text, StyleSheet } from "react-native";
 import { colors } from "../../styles/colours";
+import Navbar from "@/components/Navbar";
 import AppButton from "@/components/AppButton";
 import { useRouter, useLocalSearchParams } from "expo-router";
 
 export default function GameOver() {
     const router = useRouter();
     const params = useLocalSearchParams();
+
+    // back handler to prevent going back into completed game
+    const handleBack = () => {
+        router.replace({ pathname: "/pages/ChooseGame" } as any);
+    };
 
     // If leaderboard param provided (multiplayer), it will be a JSON string
     const leaderboardJson = params.leaderboard as string | undefined;
@@ -21,6 +27,7 @@ export default function GameOver() {
 
         return (
             <View style={styles.container}>
+                <Navbar title="Game Over" onBack={handleBack} />
                 <Text style={styles.title}>🏆 Lobby Leaderboard</Text>
                 <View style={{ width: '100%', paddingHorizontal: 20 }}>
                     {leaderboard.map((p, i) => (
@@ -44,6 +51,7 @@ export default function GameOver() {
 
     return (
         <View style={styles.container}>
+            <Navbar title="Game Over" onBack={handleBack} />
             <Text style={styles.title}>🎮 Game Over!</Text>
             <Text style={styles.stats}>
                 You got {score}/{total} correct ({accuracy}%)

@@ -10,6 +10,7 @@ namespace PokemonQuizAPI.Hubs
         private static readonly ConcurrentDictionary<string, RoomData> Rooms = new();
         private readonly ILogger<GameHub> _logger;
         private readonly DatabaseHelper _db;
+        private const int MaxNameLength = 24;
 
         public GameHub(ILogger<GameHub> logger, DatabaseHelper db)
         {
@@ -121,6 +122,13 @@ namespace PokemonQuizAPI.Hubs
                     return;
                 }
 
+                hostName = hostName.Trim();
+                if (hostName.Length > MaxNameLength)
+                {
+                    await Clients.Caller.SendAsync("Error", $"Host name too long. Maximum {MaxNameLength} characters allowed.");
+                    return;
+                }
+
                 string roomCode;
                 do
                 {
@@ -129,7 +137,7 @@ namespace PokemonQuizAPI.Hubs
 
                 var hostPlayer = new Player
                 {
-                    Name = hostName.Trim(),
+                    Name = hostName,
                     IsHost = true,
                     ConnectionId = Context.ConnectionId,
                     Score = 0
@@ -237,6 +245,13 @@ namespace PokemonQuizAPI.Hubs
                     return;
                 }
 
+                playerName = playerName.Trim();
+                if (playerName.Length > MaxNameLength)
+                {
+                    await Clients.Caller.SendAsync("Error", $"Player name too long. Maximum {MaxNameLength} characters allowed.");
+                    return;
+                }
+
                 roomCode = roomCode.ToUpper();
 
                 // If room not in memory, check DB and rehydrate minimal room if it exists
@@ -300,7 +315,7 @@ namespace PokemonQuizAPI.Hubs
 
                 var newPlayer = new Player
                 {
-                    Name = playerName.Trim(),
+                    Name = playerName,
                     IsHost = false,
                     ConnectionId = Context.ConnectionId,
                     Score = 0
@@ -325,7 +340,8 @@ namespace PokemonQuizAPI.Hubs
                 {
                     try
                     {
-                        currentQuestion = roomData.CurrentQuestion is JObject j ? j : JObject.FromObject(roomData.CurrentQuestion);
+                        var normalizedQ = roomData.CurrentQuestion is JObject j ? j : JObject.FromObject(roomData.CurrentQuestion);
+                        currentQuestion = ConvertNormalizedToPlainObject((JObject)normalizedQ);
                     }
                     catch
                     {
@@ -457,10 +473,9 @@ namespace PokemonQuizAPI.Hubs
                     roomData.QuestionStartedAt = DateTime.UtcNow;
                     roomData.Submissions = new Dictionary<string, object>();
 
-                    // convert to simple serializable object
-                    var plain = ConvertNormalizedToPlainObject(normalized);
-                    _logger.LogDebug("Broadcasting Question for room {RoomCode}: {Question}", roomCode, normalized.ToString());
+                    _logger.LogInformation("Broadcasting Question for room {RoomCode}: {Question}", roomCode, normalized.ToString());
 
+                    var plain = ConvertNormalizedToPlainObject(normalized);
                     await Clients.Group(roomCode).SendAsync("Question", plain);
                 }
                 catch (Exception ex)
@@ -566,8 +581,22 @@ namespace PokemonQuizAPI.Hubs
                 catch (Exception ex)
                 {
                     _logger.LogWarning(ex, "Failed to convert questionData to JObject for room {RoomCode}", roomCode);
-                    await Clients.Caller.SendAsync("Error", "Invalid question payload.");
-                    return;
+                    // continue and try to generate server-side question below
+                    questionObj = null;
+                }
+
+                // If incoming payload is empty or malformed, generate server-side question as a fallback
+                if (questionObj == null ||
+                    (questionObj.SelectToken("pokemonName") == null && questionObj.SelectToken("PokemonName") == null && questionObj.SelectToken("name") == null) ||
+                    (questionObj.SelectToken("correctValue") == null && questionObj.SelectToken("CorrectValue") == null && questionObj.SelectToken("correct_value") == null))
+                {
+                    _logger.LogInformation("Incoming question payload was empty or malformed for room {RoomCode}, generating server-side question as fallback", roomCode);
+                    questionObj = await GenerateRandomQuestionAsync();
+                    if (questionObj == null)
+                    {
+                        await Clients.Caller.SendAsync("Error", "Failed to generate question on server.");
+                        return;
+                    }
                 }
 
                 // Normalize outgoing shape to ensure clients receive consistent fields
@@ -577,7 +606,7 @@ namespace PokemonQuizAPI.Hubs
                 roomData.QuestionStartedAt = DateTime.UtcNow;
                 roomData.Submissions = new Dictionary<string, object>();
 
-                _logger.LogDebug("SendQuestionToRoom broadcasting for {RoomCode}: {Question}", roomCode, normalized.ToString());
+                _logger.LogInformation("SendQuestionToRoom broadcasting for {RoomCode}: {Question}", roomCode, normalized.ToString());
 
                 // convert to simple serializable object
                 var plainOut = ConvertNormalizedToPlainObject(normalized);

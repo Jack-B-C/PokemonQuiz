@@ -42,6 +42,7 @@ export default function MultiplayerPokemonGame() {
     const [pokemonData, setPokemonData] = useState<PokemonGameData | null>(null);
     const [options, setOptions] = useState<StatOption[]>([]);
     const [selectedAnswer, setSelectedAnswer] = useState<number | null>(null);
+    const selectedAnswerRef = useRef<number | null>(null);
     const [showResult, setShowResult] = useState(false);
     const [isCorrect, setIsCorrect] = useState(false);
     const [timer, setTimer] = useState(20);
@@ -51,6 +52,7 @@ export default function MultiplayerPokemonGame() {
     const [pointsEarned, setPointsEarned] = useState(0);
     const [roundResults, setRoundResults] = useState<{ name: string; correct: boolean; answer: number | null }[] | null>(null);
     const [waitingForOthers, setWaitingForOthers] = useState(false);
+    const questionReceivedRef = useRef<number>(0);
 
     const router = useRouter();
     const params = useLocalSearchParams();
@@ -139,34 +141,52 @@ export default function MultiplayerPokemonGame() {
                 if (data?.players) setPlayers(data.players);
                 if (data?.currentQuestion) {
                     const q = data.currentQuestion;
-                    if (q) handleNewQuestion(q);
-                    if (data?.questionStartedAt) {
+                    if (q && data?.questionStartedAt) {
                         const started = Date.parse(data.questionStartedAt as string);
-                        if (!isNaN(started)) questionStartTimeRef.current = started;
+                        if (!isNaN(started)) {
+                            handleNewQuestion(q, started);
+                        } else {
+                            handleNewQuestion(q);
+                        }
+                    } else if (q) {
+                        handleNewQuestion(q);
                     }
                 }
             });
 
             connection.on("Error", (msg: string) => {
+                // ignore noisy "Game already started" when rehydrating; log others
+                if (typeof msg === 'string' && msg.includes('Game already started')) {
+                    console.debug('Ignored server error during join:', msg);
+                    return;
+                }
                 console.warn('Server Error', msg);
             });
 
-            // rehydrate room and join
+            // Try to rehydrate room info (this will also inform whether the game already started)
             try {
                 const info = await connection.invoke('GetRoomInfo', roomCode);
                 console.debug('GetRoomInfo result:', info);
                 if (info) {
                     if (info.players) setPlayers(info.players);
+
+                    // If server tells us the game already started, don't attempt a JoinRoom (it would error)
+                    const gameStarted = !!info.gameStarted || !!info.GameStarted || false;
+
                     if (info.currentQuestion) {
-                        handleNewQuestion(info.currentQuestion);
-                        if (info.questionStartedAt) {
-                            const startedAt = Date.parse(info.questionStartedAt as string);
-                            if (!isNaN(startedAt)) questionStartTimeRef.current = startedAt;
-                        }
+                        const startedAt = info.questionStartedAt ? Date.parse(info.questionStartedAt as string) : NaN;
+                        if (!isNaN(startedAt)) handleNewQuestion(info.currentQuestion, startedAt);
+                        else handleNewQuestion(info.currentQuestion);
+                    }
+
+                    if (!gameStarted) {
+                        try { await connection.invoke('JoinRoom', roomCode, playerName); } catch (e) { console.warn('JoinRoom failed in multiplayer page', e); }
+                    } else {
+                        // If game already started, attempt to claim host if our name matches host (for reconnect) otherwise skip Join
+                        console.debug('Room already started, skipping JoinRoom to avoid server error');
                     }
                 }
 
-                try { await connection.invoke('JoinRoom', roomCode, playerName); } catch (e) { console.warn('JoinRoom failed in multiplayer page', e); }
             } catch (e) {
                 console.warn('GetRoomInfo/JoinRoom failed in multiplayer setup', e);
             }
@@ -174,6 +194,64 @@ export default function MultiplayerPokemonGame() {
         } catch (err) {
             console.error('Multiplayer setup failed', err);
             alert('Connection Error');
+        }
+    };
+
+    // Updated handleNewQuestion to accept optional start timestamp
+    const handleNewQuestion = (data: any, startAtMs?: number | null) => {
+        questionReceivedRef.current = Date.now();
+        const normalized = normalizeIncomingQuestion(data);
+        console.debug('Normalized question:', normalized);
+        if (!normalized) {
+            // show fallback
+            setPokemonData({ pokemonName: 'Unknown', image_Url: '', statToGuess: 'stat', correctValue: 0, otherValues: [] });
+            setOptions([]);
+            return;
+        }
+
+        const shuffled = [
+            { stat: normalized.statToGuess, value: normalized.correctValue },
+            ...normalized.otherValues,
+        ].sort(() => Math.random() - 0.5);
+
+        // reset selected answer ref and state
+        selectedAnswerRef.current = null;
+        setSelectedAnswer(null);
+        setShowResult(false);
+        setIsCorrect(false);
+        setWaitingForOthers(false);
+
+        setOptions(shuffled.map(o => ({ stat: o.stat, value: Number(o.value) })));
+        setPokemonData(normalized);
+        setShowLeaderboard(false);
+        setRoundResults(null);
+        setPointsEarned(0);
+        setCurrentRound((prev) => prev + 1);
+
+        // compute timer based on provided startAtMs (rehydration) or now
+        const now = Date.now();
+        const started = startAtMs ?? now;
+        questionStartTimeRef.current = started;
+
+        const elapsedSec = Math.floor((now - started) / 1000);
+        const remaining = Math.max(0, QUESTION_TIME - elapsedSec);
+        setTimer(remaining);
+
+        if (timerRef.current) clearInterval(timerRef.current);
+        if (remaining > 0) {
+            timerRef.current = setInterval(() => {
+                setTimer((prev) => {
+                    const currentSelected = selectedAnswerRef.current;
+                    if (prev <= 1) {
+                        if (timerRef.current) clearInterval(timerRef.current);
+                        if (currentSelected === null) {
+                            submitAnswer(-1);
+                        }
+                        return 0;
+                    }
+                    return prev - 1;
+                });
+            }, 1000);
         }
     };
 
@@ -205,134 +283,59 @@ export default function MultiplayerPokemonGame() {
         };
     };
 
-    const handleNewQuestion = (data: any) => {
-        const normalized = normalizeIncomingQuestion(data);
-        console.debug('Normalized question:', normalized);
-        if (!normalized) {
-            // show fallback
-            setPokemonData({ pokemonName: 'Unknown', image_Url: '', statToGuess: 'stat', correctValue: 0, otherValues: [] });
-            setOptions([]);
-            return;
-        }
-
-        const shuffled = [
-            { stat: normalized.statToGuess, value: normalized.correctValue },
-            ...normalized.otherValues,
-        ].sort(() => Math.random() - 0.5);
-
-        setOptions(shuffled.map(o => ({ stat: o.stat, value: Number(o.value) })));
-        setPokemonData(normalized);
-        setSelectedAnswer(null);
-        setShowResult(false);
-        setShowLeaderboard(false);
-        setRoundResults(null);
-        setTimer(QUESTION_TIME);
-        setPointsEarned(0);
-        setCurrentRound((prev) => prev + 1);
-        questionStartTimeRef.current = Date.now();
-        if (timerRef.current) clearInterval(timerRef.current);
-        timerRef.current = setInterval(() => {
-            setTimer((prev) => {
-                if (prev <= 1) {
-                    if (timerRef.current) clearInterval(timerRef.current);
-                    if (selectedAnswer === null) {
-                        submitAnswer(-1);
-                    }
-                    return 0;
-                }
-                return prev - 1;
-            });
-        }, 1000);
-    };
-
-    // Listen for AllAnswered to show round results
-    useEffect(() => {
-        if (!connectionRef.current) return;
-        const connection = connectionRef.current;
-        const handler = (data: any) => {
-            // data.submissions: [{connectionId, data: {selectedValue, correct}}]
-            // data.leaderboard: [{name, score}]
-            if (data?.submissions && players.length > 0) {
-                // Map connectionId to player name
-                const connIdToName: Record<string, string> = {};
-                players.forEach((p: any) => {
-                    if (p.ConnectionId) connIdToName[p.ConnectionId] = p.Name ?? p.name;
-                });
-                // If server doesn't send names, just show order
-                const results = data.submissions.map((s: any, i: number) => ({
-                    name: s.data?.playerName || s.data?.name || players[i]?.name || `Player ${i + 1}`,
-                    correct: !!s.data?.correct,
-                    answer: s.data?.selectedValue ?? null
-                }));
-                setRoundResults(results);
-            } else {
-                setRoundResults(null);
-            }
-            if (data?.leaderboard) {
-                setPlayers(
-                    data.leaderboard.map((p: any) => ({
-                        name: p.Name ?? p.name,
-                        score: p.Score ?? p.score,
-                    }))
-                );
-            }
-            setShowLeaderboard(true);
-        };
-        connection.on("AllAnswered", handler);
-        return () => { connection.off("AllAnswered", handler); };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [players]);
-
     const submitAnswer = async (value: number) => {
-        if (selectedAnswer !== null || !pokemonData || !connectionRef.current) return;
+        if (selectedAnswerRef.current !== null || !pokemonData || !connectionRef.current) return;
 
+        selectedAnswerRef.current = value;
         setSelectedAnswer(value);
-        setWaitingForOthers(true);
+         setWaitingForOthers(true);
 
-        // mark local player as answered for UI
-        setPlayers(prev => prev.map(p => p.name === playerName ? { ...p, answered: true } : p));
+         // mark local player as answered for UI
+         setPlayers(prev => prev.map(p => p.name === playerName ? { ...p, answered: true } : p));
 
-        const timeTaken = Date.now() - questionStartTimeRef.current;
-        const correct = value === pokemonData.correctValue;
-        setIsCorrect(correct);
-        setShowResult(true);
+         const timeTaken = Date.now() - questionStartTimeRef.current;
+         const correct = value === pokemonData.correctValue;
+         setIsCorrect(correct);
+         setShowResult(true);
 
-        if (timerRef.current) clearInterval(timerRef.current);
+         if (timerRef.current) clearInterval(timerRef.current);
 
-        let points = 0;
-        if (correct) {
-            const basePoints = 1000;
-            const speedBonus = Math.floor((timer / QUESTION_TIME) * 500);
-            points = basePoints + speedBonus;
-            setPointsEarned(points);
-        }
+         let points = 0;
+         if (correct) {
+             const basePoints = 1000;
+             const speedBonus = Math.floor((timer / QUESTION_TIME) * 500);
+             points = basePoints + speedBonus;
+             setPointsEarned(points);
+         }
 
-        try {
-            const { sound } = await Audio.Sound.createAsync(
-                correct
-                    ? require("../../assets/sounds/correct.mp3")
-                    : require("../../assets/sounds/incorrect.mp3")
-            );
-            await sound.playAsync();
-            sound.setOnPlaybackStatusUpdate((status) => {
-                if (status.isLoaded && status.didJustFinish) {
-                    sound.unloadAsync();
-                }
-            });
-        } catch (error) {
-            console.warn("Sound failed", error);
-        }
+         try {
+             const { sound } = await Audio.Sound.createAsync(
+                 correct
+                     ? require("../../assets/sounds/correct.mp3")
+                     : require("../../assets/sounds/incorrect.mp3")
+             );
+             await sound.playAsync();
+             sound.setOnPlaybackStatusUpdate((status) => {
+                 if (status.isLoaded && status.didJustFinish) {
+                     sound.unloadAsync();
+                 }
+             });
+         } catch (error) {
+             console.warn("Sound failed", error);
+         }
 
-        try {
-            await connectionRef.current.invoke("SubmitAnswer", roomCode, value, timeTaken);
-        } catch (error) {
-            console.error("Failed to submit:", error);
-            // clear waiting state if submit failed
-            setWaitingForOthers(false);
-        }
-    };
+         try {
+             await connectionRef.current.invoke("SubmitAnswer", roomCode, value, timeTaken);
+         } catch (error) {
+             console.error("Failed to submit:", error);
+             // clear waiting state if submit failed
+             setWaitingForOthers(false);
+             selectedAnswerRef.current = null;
+             setSelectedAnswer(null);
+         }
+     };
 
-    const sendNextQuestion = async () => {
+     const sendNextQuestion = async () => {
         if (!isHost || !connectionRef.current) return;
 
         if (currentRound >= MAX_ROUNDS) {
@@ -344,17 +347,78 @@ export default function MultiplayerPokemonGame() {
             return;
         }
 
+        // reset local per-question state
         setShowLeaderboard(false);
+        setShowResult(false);
+        setRoundResults(null);
+        setWaitingForOthers(false);
+        selectedAnswerRef.current = null;
+        setSelectedAnswer(null);
 
         try {
-            const res = await fetch(`http://${serverIp}:5168/api/game/random`);
-            const data = await res.json();
-            await connectionRef.current.invoke("SendQuestionToRoom", roomCode, data);
+            const maxAttempts = 3;
+            let data: any = null;
+            let attempt = 0;
+            while (attempt < maxAttempts) {
+                attempt++;
+                const res = await fetch(`http://${serverIp}:5168/api/game/random`);
+                if (!res.ok) {
+                    console.warn(`Random API returned ${res.status} on attempt ${attempt}`);
+                    continue;
+                }
+                data = await res.json();
+
+                // basic validation: has pokemonName and correctValue
+                const hasName = !!(data && (data.pokemonName || data.PokemonName || data.name));
+                const hasCorrect = data && (data.correctValue != null || data.CorrectValue != null || data.correct_value != null);
+                const hasOptions = Array.isArray(data.otherValues) && data.otherValues.length > 0 || Array.isArray(data.OtherValues) && data.OtherValues.length > 0;
+
+                if (hasName && hasCorrect && hasOptions) {
+                    break; // valid
+                }
+
+                console.warn('Invalid question payload from API, retrying...', { attempt, data });
+                data = null;
+            }
+
+            if (!data) {
+                console.warn('Failed to fetch a valid question from API after attempts; server will generate fallback.');
+            }
+
+            console.debug('Host invoking SendQuestionToRoom with data:', data);
+            // reset questionReceived timestamp before invoking
+            questionReceivedRef.current = 0;
+
+            await connectionRef.current.invoke("SendQuestionToRoom", roomCode, data ?? {});
+
+            // wait briefly for clients to receive Question via SignalR; if none received, rehydrate via GetRoomInfo
+            setTimeout(async () => {
+                const elapsed = Date.now() - (questionReceivedRef.current || 0);
+                if (questionReceivedRef.current === 0 || elapsed < 0 || elapsed > 5000) {
+                    // no question received within 2s — attempt to rehydrate
+                    console.debug('No Question event received within timeout, rehydrating via GetRoomInfo');
+                    try {
+                        const conn = connectionRef.current!;
+                        const info = await conn.invoke('GetRoomInfo', roomCode);
+                        console.debug('Rehydrate GetRoomInfo result after SendQuestion:', info);
+                        if (info && info.currentQuestion) {
+                            const startedAt = info.questionStartedAt ? Date.parse(info.questionStartedAt as string) : NaN;
+                            if (!isNaN(startedAt)) handleNewQuestion(info.currentQuestion, startedAt);
+                            else handleNewQuestion(info.currentQuestion);
+                        }
+                    } catch (e) {
+                        console.warn('Rehydrate GetRoomInfo failed', e);
+                    }
+                } else {
+                    console.debug('Question event was received by clients (timestamp)', questionReceivedRef.current);
+                }
+            }, 2000);
+
         } catch (error) {
             console.error("Failed to send question:", error);
             alert("Failed to load next question");
         }
-    };
+     };
 
     // Loading state before first question
     if (!pokemonData && !showLeaderboard) {

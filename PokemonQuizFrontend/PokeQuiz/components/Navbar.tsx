@@ -16,11 +16,11 @@ export default function Navbar({ title, onBack }: Props) {
             return;
         }
 
-        // Default: navigate to game selection to avoid returning to previous question state
+        // Default: go back in history
         try {
-            router.replace('/pages/ChooseGame');
+            router.back();
         } catch {
-            // Fallback to root if replace fails
+            // Fallback to root if back fails
             router.push('/');
         }
     };

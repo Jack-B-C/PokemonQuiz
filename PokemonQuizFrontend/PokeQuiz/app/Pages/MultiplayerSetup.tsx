@@ -88,5 +88,5 @@ const styles = StyleSheet.create({
     errorText: { color: "#ef4444", marginBottom: 10 },
     mainButton: { width: "80%", marginVertical: 10 },
     orText: { fontSize: 16, marginVertical: 15, color: "#666" },
-    hostButton: { width: "60%", backgroundColor: "#FFCDD2", marginVertical: 5 },
+    hostButton: { width: "60%", backgroundColor: "#91000f", marginVertical: 5 },
 });
