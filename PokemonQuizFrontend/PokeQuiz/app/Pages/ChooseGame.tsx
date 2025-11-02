@@ -1,10 +1,12 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Image, Platform, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Image, Platform, Alert, Dimensions } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { colors } from '../../styles/colours';
 import Navbar from '@/components/Navbar';
 import { getConnection, ensureConnection } from '../../utils/signalrClient';
 import * as SignalR from '@microsoft/signalr';
+
+const { width, height } = Dimensions.get('window');
 
 export default function ChooseGame() {
     const router = useRouter();
@@ -94,20 +96,21 @@ export default function ChooseGame() {
 
     return (
         <View style={styles.container}>
-            <Navbar title={isMultiplayer ? "Choose Game (Room: " + roomCode + ")" : "Choose Game"} />
-
-            <View style={styles.content}>
-                <Text style={styles.subtitle}>
-                    {isMultiplayer ? 'Select a game for your room' : 'Select a game to play'}
+            <Navbar title={isMultiplayer ? `Choose Game (Room: ${roomCode})` : 'Choose Game'} />
+            <View style={[styles.content, { paddingTop: 16 + (Platform.OS === 'android' ? 0 : 0) }]}>
+                <Text style={styles.title}>
+                    {isMultiplayer ? 'Select a Game Mode for Your Room' : 'Select a Game Mode'}
                 </Text>
-
+                <Text style={styles.subtitle}>
+                    {isMultiplayer ? 'Pick a game for everyone to play together!' : 'Pick a game to play!'}
+                </Text>
                 <View style={styles.gamesContainer}>
                     {games.map((game) => (
                         <TouchableOpacity
                             key={game.id}
                             style={styles.gameCard}
                             onPress={() => handleGameSelect(game.id)}
-                            activeOpacity={0.8}
+                            activeOpacity={0.85}
                         >
                             <Image source={game.image} style={styles.gameImage} resizeMode="contain" />
                             <Text style={styles.gameName}>{game.name}</Text>
@@ -126,43 +129,57 @@ const styles = StyleSheet.create({
     },
     content: {
         flex: 1,
-        padding: 20,
+        padding: 16,
         alignItems: 'center',
+        justifyContent: 'flex-start',
+    },
+    title: {
+        fontSize: width < 360 ? 20 : 28,
+        fontWeight: '900',
+        color: colors.primary || '#FF5252',
+        marginTop: 18,
+        marginBottom: 6,
+        textAlign: 'center',
+        letterSpacing: 0.5,
     },
     subtitle: {
-        fontSize: 20,
-        marginVertical: 30,
+        fontSize: 16,
+        color: colors.text || '#fff',
+        marginBottom: 18,
         textAlign: 'center',
-        fontWeight: '600',
+        fontWeight: '500',
     },
     gamesContainer: {
-        flexDirection: 'row',
+        flexDirection: width < 600 ? 'column' : 'row',
         flexWrap: 'wrap',
         justifyContent: 'center',
-        gap: 20,
+        alignItems: 'center',
+        gap: 18,
         width: '100%',
     },
     gameCard: {
-        width: 280,
+        width: width < 600 ? '90%' : 280,
         backgroundColor: colors.primary || '#FF5252',
         borderRadius: 20,
         padding: 20,
         alignItems: 'center',
+        marginBottom: 18,
         shadowColor: '#000',
-        shadowOpacity: 0.25,
+        shadowOpacity: 0.18,
         shadowRadius: 8,
         shadowOffset: { width: 0, height: 4 },
         elevation: 5,
     },
     gameImage: {
-        width: 150,
-        height: 150,
-        marginBottom: 15,
+        width: 120,
+        height: 120,
+        marginBottom: 12,
     },
     gameName: {
-        fontSize: 18,
+        fontSize: 20,
         fontWeight: '700',
         color: colors.white,
         textAlign: 'center',
+        marginTop: 4,
     },
 });

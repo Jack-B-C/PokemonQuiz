@@ -9,12 +9,19 @@ namespace PokemonQuizAPI.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
-    public class SeedController(DatabaseHelper db, ILogger<SeedController> logger, IHubContext<GameHub> hubContext) : ControllerBase
+    public class SeedController : ControllerBase
     {
-        private readonly DatabaseHelper _db = db;
-        private readonly ILogger<SeedController> _logger = logger;
+        private readonly DatabaseHelper _db;
+        private readonly ILogger<SeedController> _logger;
         private readonly HttpClient _httpClient = new();
-        private readonly IHubContext<GameHub> _hubContext = hubContext;
+        private readonly IHubContext<GameHub> _hubContext;
+
+        public SeedController(DatabaseHelper db, ILogger<SeedController> logger, IHubContext<GameHub> hubContext)
+        {
+            _db = db;
+            _logger = logger;
+            _hubContext = hubContext;
+        }
 
         [HttpPost("pokemon")]
         [HttpGet("pokemon")]  // Allow GET for easy browser testing
@@ -173,17 +180,12 @@ namespace PokemonQuizAPI.Controllers
         }
 
         [HttpDelete("pokemon")]
-        public IActionResult ClearPokemon()
+        public async Task<IActionResult> ClearPokemon()
         {
             try
             {
-                // This would need a new method in DatabaseHelper
-                // For now, just return instructions
-                return Ok(new
-                {
-                    message = "To clear the database, run this SQL in HeidiSQL:",
-                    sql = "DELETE FROM PokemonData;"
-                });
+                var cleared = await _db.ClearAllPokemonAsync();
+                return Ok(new { message = "Cleared Pokémon data", cleared });
             }
             catch (Exception ex)
             {

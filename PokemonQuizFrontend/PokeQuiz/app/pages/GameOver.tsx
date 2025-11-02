@@ -1,9 +1,10 @@
 ﻿import React from "react";
-import { View, Text, StyleSheet } from "react-native";
+import { View, Text, StyleSheet, Alert } from "react-native";
 import { colors } from "../../styles/colours";
 import Navbar from "@/components/Navbar";
 import AppButton from "@/components/AppButton";
 import { useRouter, useLocalSearchParams } from "expo-router";
+import { ensureConnection, getConnection } from '@/utils/signalrClient';
 
 export default function GameOver() {
     const router = useRouter();
@@ -14,8 +15,27 @@ export default function GameOver() {
         router.replace({ pathname: "/pages/ChooseGame" } as any);
     };
 
+    // Multiplayer support: roomCode, isHost, playerName may be present
+    const roomCode = params.roomCode as string | undefined;
+    const isHost = String(params.isHost ?? '') === 'true';
+    const playerName = params.playerName as string | undefined;
+
     // If leaderboard param provided (multiplayer), it will be a JSON string
     const leaderboardJson = params.leaderboard as string | undefined;
+
+    const handleHostReplay = async () => {
+        if (!roomCode) return;
+        try {
+            const serverIp = (global as any).navigator && (global as any).navigator.product === 'ReactNative' && (global as any).Platform?.OS === 'android' ? '10.0.2.2' : 'localhost';
+            const hubUrl = `http://${serverIp}:5168/hubs/game`;
+            const conn = await ensureConnection(hubUrl);
+            if (!conn) throw new Error('No connection');
+            await conn.invoke('StartGame', roomCode);
+        } catch (err: any) {
+            console.warn('Failed to replay as host', err);
+            Alert.alert('Error', 'Failed to start a new game: ' + (err?.message ?? String(err)));
+        }
+    };
 
     if (leaderboardJson) {
         let leaderboard: { Name?: string; name?: string; Score?: number; score?: number }[] = [];
@@ -34,6 +54,15 @@ export default function GameOver() {
                         <Text key={i} style={styles.leaderText}>{i + 1}. {p.Name ?? p.name}: {p.Score ?? p.score}</Text>
                     ))}
                 </View>
+
+                {isHost && roomCode ? (
+                    <AppButton
+                        label="Play Again"
+                        onPress={handleHostReplay}
+                        backgroundColor={colors.primary}
+                        style={styles.button}
+                    />
+                ) : null}
 
                 <AppButton
                     label="Back to Menu"

@@ -5,6 +5,8 @@ import Navbar from "@/components/Navbar";
 import AppButton from "@/components/AppButton";
 import { useRouter, useLocalSearchParams } from "expo-router";
 
+const MAX_NAME_LENGTH = 24;
+
 export default function JoinGame() {
     const router = useRouter();
     const params = useLocalSearchParams();
@@ -13,14 +15,19 @@ export default function JoinGame() {
     const [playerName, setPlayerName] = useState("");
 
     const handleJoin = () => {
-        if (!playerName.trim()) {
+        const trimmed = playerName.trim();
+        if (!trimmed) {
             Alert.alert("Error", "Please enter your name");
+            return;
+        }
+        if (trimmed.length > MAX_NAME_LENGTH) {
+            Alert.alert("Error", `Name too long. Max ${MAX_NAME_LENGTH} characters.`);
             return;
         }
 
         router.push({
             pathname: "/pages/WaitingRoom",
-            params: { roomCode, playerName },
+            params: { roomCode, playerName: trimmed },
         });
     };
 
@@ -35,7 +42,7 @@ export default function JoinGame() {
                     placeholder="Your Name"
                     placeholderTextColor="#999"
                     value={playerName}
-                    onChangeText={setPlayerName}
+                    onChangeText={(text) => setPlayerName(text.slice(0, MAX_NAME_LENGTH))}
                 />
                 <AppButton label="Join Room" onPress={handleJoin} />
             </View>

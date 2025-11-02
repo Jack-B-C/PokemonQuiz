@@ -1,24 +1,108 @@
 ﻿using MySql.Data.MySqlClient;
 using PokemonQuizAPI.Models;
 using System.Data;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Threading;
+using System.IO;
+using System.Linq;
 
 namespace PokemonQuizAPI.Data
 {
-    public class DatabaseHelper(IConfiguration configuration, ILogger<DatabaseHelper> logger)
+    public class DatabaseHelper
     {
-        private readonly string _connectionString = configuration.GetConnectionString("PokemonQuizDB")
-            ?? throw new ArgumentNullException(nameof(configuration), "Connection string 'PokemonQuizDB' not found");
-        private readonly ILogger<DatabaseHelper> _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        private readonly string? _connectionString;
+        private readonly ILogger<DatabaseHelper> _logger;
+
+        private readonly bool _useFileStorage;
+        private readonly string _dataDir;
+        private readonly string _pokemonFile;
+        private readonly string _gameRoomFile;
+        private readonly SemaphoreSlim _fileLock = new(1, 1);
+
+        public DatabaseHelper(IConfiguration configuration, ILogger<DatabaseHelper> logger)
+        {
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _connectionString = configuration.GetConnectionString("PokemonQuizDB");
+
+            // determine data directory for file fallback
+            _dataDir = Path.Combine(AppContext.BaseDirectory, "data");
+            Directory.CreateDirectory(_dataDir);
+            _pokemonFile = Path.Combine(_dataDir, "pokemon.json");
+            _gameRoomFile = Path.Combine(_dataDir, "gamerooms.json");
+
+            // Detect whether we should use file storage: no connection string OR can't connect to MySQL
+            if (string.IsNullOrWhiteSpace(_connectionString))
+            {
+                _logger.LogWarning("No MySQL connection string provided; falling back to local JSON storage at {DataDir}", _dataDir);
+                _useFileStorage = true;
+            }
+            else
+            {
+                try
+                {
+                    using var conn = new MySqlConnection(_connectionString);
+                    conn.Open();
+                    conn.Close();
+                    _useFileStorage = false;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to connect to MySQL using provided connection string; falling back to local JSON storage at {DataDir}", _dataDir);
+                    _useFileStorage = true;
+                }
+            }
+        }
 
         private async Task<MySqlConnection> GetConnectionAsync()
         {
-            var conn = new MySqlConnection(_connectionString);
+            if (_useFileStorage)
+                throw new InvalidOperationException("Using file storage; no MySQL connection available.");
+
+            var conn = new MySqlConnection(_connectionString!);
             await conn.OpenAsync();
             return conn;
         }
 
+        private static readonly JsonSerializerOptions _jsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true };
+
+        private async Task<List<T>> ReadJsonListAsync<T>(string path)
+        {
+            await _fileLock.WaitAsync();
+            try
+            {
+                if (!File.Exists(path)) return new List<T>();
+                var txt = await File.ReadAllTextAsync(path);
+                if (string.IsNullOrWhiteSpace(txt)) return new List<T>();
+                return JsonSerializer.Deserialize<List<T>>(txt, _jsonOptions) ?? new List<T>();
+            }
+            finally
+            {
+                _fileLock.Release();
+            }
+        }
+
+        private async Task WriteJsonListAsync<T>(string path, List<T> items)
+        {
+            await _fileLock.WaitAsync();
+            try
+            {
+                var txt = JsonSerializer.Serialize(items, _jsonOptions);
+                await File.WriteAllTextAsync(path, txt);
+            }
+            finally
+            {
+                _fileLock.Release();
+            }
+        }
+
         public async Task<List<PokemonData>> GetAllPokemonAsync()
         {
+            if (_useFileStorage)
+            {
+                return await ReadJsonListAsync<PokemonData>(_pokemonFile);
+            }
+
             var result = new List<PokemonData>();
 
             try
@@ -45,6 +129,12 @@ namespace PokemonQuizAPI.Data
 
         public async Task<PokemonData?> GetPokemonByIdAsync(string id)
         {
+            if (_useFileStorage)
+            {
+                var list = await ReadJsonListAsync<PokemonData>(_pokemonFile);
+                return list.FirstOrDefault(p => p.Id == id);
+            }
+
             try
             {
                 await using var conn = await GetConnectionAsync();
@@ -69,6 +159,12 @@ namespace PokemonQuizAPI.Data
 
         public async Task<int> GetPokemonCountAsync()
         {
+            if (_useFileStorage)
+            {
+                var list = await ReadJsonListAsync<PokemonData>(_pokemonFile);
+                return list.Count;
+            }
+
             try
             {
                 await using var conn = await GetConnectionAsync();
@@ -86,6 +182,14 @@ namespace PokemonQuizAPI.Data
 
         public async Task<bool> InsertPokemonAsync(PokemonData pokemon)
         {
+            if (_useFileStorage)
+            {
+                var list = await ReadJsonListAsync<PokemonData>(_pokemonFile);
+                list.Add(pokemon);
+                await WriteJsonListAsync(_pokemonFile, list);
+                return true;
+            }
+
             try
             {
                 await using var conn = await GetConnectionAsync();
@@ -119,34 +223,71 @@ namespace PokemonQuizAPI.Data
             }
         }
 
+        // Internal record for file-based GameRoom storage
+        private class GameRoomRecord
+        {
+            [JsonPropertyName("id")]
+            public string Id { get; set; } = string.Empty;
+            [JsonPropertyName("gameId")]
+            public string? GameId { get; set; }
+            [JsonPropertyName("hostUserId")]
+            public string? HostUserId { get; set; }
+            [JsonPropertyName("roomCode")]
+            public string RoomCode { get; set; } = string.Empty;
+            [JsonPropertyName("isActive")]
+            public bool IsActive { get; set; }
+            [JsonPropertyName("createdAt")]
+            public DateTime CreatedAt { get; set; }
+        }
+
         /// <summary>
         /// Insert a new game room into the GameRoom table.
         /// hostUserId and gameId are optional and will be saved as NULL when not provided.
         /// </summary>
         public async Task<bool> InsertGameRoomAsync(string roomCode, string? hostUserId = null, string? gameId = null)
         {
-            try
+            if (_useFileStorage)
             {
-                await using var conn = await GetConnectionAsync();
-                await using var cmd = new MySqlCommand(@"
+                var rooms = await ReadJsonListAsync<GameRoomRecord>(_gameRoomFile);
+                var rec = new GameRoomRecord
+                {
+                    Id = Guid.NewGuid().ToString(),
+                    GameId = gameId,
+                    HostUserId = hostUserId,
+                    RoomCode = roomCode.ToUpper(),
+                    IsActive = true,
+                    CreatedAt = DateTime.UtcNow
+                };
+                rooms.Add(rec);
+                await WriteJsonListAsync(_gameRoomFile, rooms);
+                _logger.LogInformation("Inserted GameRoom {RoomCode} into local storage", roomCode);
+                return true;
+            }
+            else
+            {
+                try
+                {
+                    await using var conn = await GetConnectionAsync();
+                    await using var cmd = new MySqlCommand(@"
                     INSERT INTO GameRoom (id, game_id, host_user_id, room_code, is_active, created_at)
                     VALUES (@id, @game_id, @host_user_id, @room_code, @is_active, @created_at)", conn);
 
-                cmd.Parameters.AddWithValue("@id", Guid.NewGuid().ToString());
-                cmd.Parameters.AddWithValue("@game_id", gameId ?? (object)DBNull.Value);
-                cmd.Parameters.AddWithValue("@host_user_id", hostUserId ?? (object)DBNull.Value);
-                cmd.Parameters.AddWithValue("@room_code", roomCode.ToUpper());
-                cmd.Parameters.AddWithValue("@is_active", true);
-                cmd.Parameters.AddWithValue("@created_at", DateTime.UtcNow);
+                    cmd.Parameters.AddWithValue("@id", Guid.NewGuid().ToString());
+                    cmd.Parameters.AddWithValue("@game_id", gameId ?? (object)DBNull.Value);
+                    cmd.Parameters.AddWithValue("@host_user_id", hostUserId ?? (object)DBNull.Value);
+                    cmd.Parameters.AddWithValue("@room_code", roomCode.ToUpper());
+                    cmd.Parameters.AddWithValue("@is_active", true);
+                    cmd.Parameters.AddWithValue("@created_at", DateTime.UtcNow);
 
-                var rowsAffected = await cmd.ExecuteNonQueryAsync();
-                _logger.LogInformation("Inserted GameRoom {RoomCode} into database", roomCode);
-                return rowsAffected > 0;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error inserting GameRoom: {RoomCode}", roomCode);
-                throw;
+                    var rowsAffected = await cmd.ExecuteNonQueryAsync();
+                    _logger.LogInformation("Inserted GameRoom {RoomCode} into database", roomCode);
+                    return rowsAffected > 0;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error inserting GameRoom: {RoomCode}", roomCode);
+                    throw;
+                }
             }
         }
 
@@ -155,6 +296,12 @@ namespace PokemonQuizAPI.Data
         /// </summary>
         public async Task<bool> GameRoomExistsAsync(string roomCode)
         {
+            if (_useFileStorage)
+            {
+                var rooms = await ReadJsonListAsync<GameRoomRecord>(_gameRoomFile);
+                return rooms.Any(r => string.Equals(r.RoomCode, roomCode, StringComparison.OrdinalIgnoreCase) && r.IsActive);
+            }
+
             try
             {
                 await using var conn = await GetConnectionAsync();
@@ -172,11 +319,45 @@ namespace PokemonQuizAPI.Data
         }
 
         /// <summary>
+        /// Returns true if a GameRoom with the given room code exists, regardless of its active status
+        /// </summary>
+        public async Task<bool> GameRoomExistsAnyStatusAsync(string roomCode)
+        {
+            if (_useFileStorage)
+            {
+                var rooms = await ReadJsonListAsync<GameRoomRecord>(_gameRoomFile);
+                return rooms.Any(r => string.Equals(r.RoomCode, roomCode, StringComparison.OrdinalIgnoreCase));
+            }
+
+            try
+            {
+                await using var conn = await GetConnectionAsync();
+                await using var cmd = new MySqlCommand("SELECT COUNT(*) FROM GameRoom WHERE TRIM(room_code) = @code", conn);
+                cmd.Parameters.AddWithValue("@code", roomCode.ToUpper().Trim());
+
+                var count = await cmd.ExecuteScalarAsync();
+                return Convert.ToInt32(count) > 0;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error checking existence of GameRoom (any status): {RoomCode}", roomCode);
+                throw;
+            }
+        }
+
+        /// <summary>
         /// Get the game_id for a GameRoom by room code (trimmed).
         /// Returns null if not found or inactive.
         /// </summary>
         public async Task<string?> GetGameIdForRoomAsync(string roomCode)
         {
+            if (_useFileStorage)
+            {
+                var rooms = await ReadJsonListAsync<GameRoomRecord>(_gameRoomFile);
+                var rec = rooms.FirstOrDefault(r => string.Equals(r.RoomCode, roomCode, StringComparison.OrdinalIgnoreCase) && r.IsActive);
+                return rec?.GameId;
+            }
+
             try
             {
                 await using var conn = await GetConnectionAsync();
@@ -199,6 +380,17 @@ namespace PokemonQuizAPI.Data
         /// </summary>
         public async Task<bool> UpdateGameRoomGameIdAsync(string roomCode, string gameId)
         {
+            if (_useFileStorage)
+            {
+                var rooms = await ReadJsonListAsync<GameRoomRecord>(_gameRoomFile);
+                var rec = rooms.FirstOrDefault(r => string.Equals(r.RoomCode, roomCode, StringComparison.OrdinalIgnoreCase) && r.IsActive);
+                if (rec == null) return false;
+                rec.GameId = gameId;
+                await WriteJsonListAsync(_gameRoomFile, rooms);
+                _logger.LogInformation("Updated GameRoom {RoomCode} with game {GameId} in local storage", roomCode, gameId);
+                return true;
+            }
+
             try
             {
                 await using var conn = await GetConnectionAsync();
@@ -222,6 +414,17 @@ namespace PokemonQuizAPI.Data
         /// </summary>
         public async Task<bool> EndGameRoomAsync(string roomCode)
         {
+            if (_useFileStorage)
+            {
+                var rooms = await ReadJsonListAsync<GameRoomRecord>(_gameRoomFile);
+                var rec = rooms.FirstOrDefault(r => string.Equals(r.RoomCode, roomCode, StringComparison.OrdinalIgnoreCase) && r.IsActive);
+                if (rec == null) return false;
+                rec.IsActive = false;
+                await WriteJsonListAsync(_gameRoomFile, rooms);
+                _logger.LogInformation("Marked GameRoom {RoomCode} ended in local storage", roomCode);
+                return true;
+            }
+
             try
             {
                 await using var conn = await GetConnectionAsync();
@@ -260,6 +463,7 @@ namespace PokemonQuizAPI.Data
 
         public async Task<bool> TestConnectionAsync()
         {
+            if (_useFileStorage) return true;
             try
             {
                 await using var conn = await GetConnectionAsync();
@@ -274,6 +478,13 @@ namespace PokemonQuizAPI.Data
 
         public async Task<int> ClearAllPokemonAsync()
         {
+            if (_useFileStorage)
+            {
+                await WriteJsonListAsync<PokemonData>(_pokemonFile, new List<PokemonData>());
+                _logger.LogInformation("Cleared Pokémon from local storage");
+                return 0;
+            }
+
             try
             {
                 await using var conn = await GetConnectionAsync();

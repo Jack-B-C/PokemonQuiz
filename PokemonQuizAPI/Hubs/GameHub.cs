@@ -2,15 +2,18 @@
 using System.Collections.Concurrent;
 using PokemonQuizAPI.Data;
 using Newtonsoft.Json.Linq;
+using System.Threading;
 
 namespace PokemonQuizAPI.Hubs
 {
     public class GameHub : Hub
     {
         private static readonly ConcurrentDictionary<string, RoomData> Rooms = new();
+        private static readonly ConcurrentDictionary<string, CancellationTokenSource> ShutdownTokens = new();
         private readonly ILogger<GameHub> _logger;
         private readonly DatabaseHelper _db;
         private const int MaxNameLength = 24;
+        private const int QuestionTimeoutMs = 20000; // 20s used for scoring
 
         public GameHub(ILogger<GameHub> logger, DatabaseHelper db)
         {
@@ -44,7 +47,7 @@ namespace PokemonQuizAPI.Hubs
         }
 
         // Helper: normalize an incoming question JObject to a consistent outgoing shape
-        private JObject BuildNormalizedQuestion(JObject source)
+        private static JObject BuildNormalizedQuestion(JObject source)
         {
             // Try multiple token names for compatibility
             var pokemonName = source.SelectToken("pokemonName")?.ToString()
@@ -74,7 +77,7 @@ namespace PokemonQuizAPI.Hubs
                 }
                 else
                 {
-                    int.TryParse(correctToken.ToString(), out correctValue);
+                    _ = int.TryParse(correctToken.ToString(), out correctValue);
                 }
             }
 
@@ -91,7 +94,7 @@ namespace PokemonQuizAPI.Hubs
                     if (valToken != null)
                     {
                         if (valToken.Type == JTokenType.Integer || valToken.Type == JTokenType.Float) val = valToken.ToObject<int>();
-                        else int.TryParse(valToken.ToString(), out val);
+                        else _ = int.TryParse(valToken.ToString(), out val);
                     }
 
                     otherValues.Add(new JObject { ["stat"] = stat, ["value"] = val });
@@ -109,6 +112,49 @@ namespace PokemonQuizAPI.Hubs
             };
 
             return normalized;
+        }
+
+        // Helper to convert normalized JObject into a plain serializable object
+        private static object ConvertNormalizedToPlainObject(JObject normalized)
+        {
+            var pokemonName = normalized.SelectToken("pokemonName")?.ToString() ?? string.Empty;
+            var imageUrl = normalized.SelectToken("image_Url")?.ToString() ?? string.Empty;
+            var statToGuess = normalized.SelectToken("statToGuess")?.ToString() ?? string.Empty;
+            var correctToken = normalized.SelectToken("correctValue");
+            int correctValue = 0;
+            if (correctToken != null)
+            {
+                if (correctToken.Type == JTokenType.Integer || correctToken.Type == JTokenType.Float)
+                    correctValue = correctToken.ToObject<int>();
+                else _ = int.TryParse(correctToken.ToString(), out correctValue);
+            }
+
+            var other = new List<object>();
+            var ovToken = normalized.SelectToken("otherValues");
+            if (ovToken is JArray arr)
+            {
+                foreach (var item in arr)
+                {
+                    var stat = item.SelectToken("stat")?.ToString() ?? string.Empty;
+                    var valToken = item.SelectToken("value") ?? item.SelectToken("Value");
+                    int val = 0;
+                    if (valToken != null)
+                    {
+                        if (valToken.Type == JTokenType.Integer || valToken.Type == JTokenType.Float) val = valToken.ToObject<int>();
+                        else _ = int.TryParse(valToken.ToString(), out val);
+                    }
+                    other.Add(new { stat, value = val });
+                }
+            }
+
+            return new
+            {
+                pokemonName,
+                image_Url = imageUrl,
+                statToGuess,
+                correctValue,
+                otherValues = other
+            };
         }
 
         // ------------------ Create Room ------------------
@@ -254,13 +300,14 @@ namespace PokemonQuizAPI.Hubs
 
                 roomCode = roomCode.ToUpper();
 
-                // If room not in memory, check DB and rehydrate minimal room if it exists
+                // If room not in memory, check DB and rehydrate minimal room if it exists (allow inactive rooms to be rejoined)
                 if (!Rooms.TryGetValue(roomCode, out var roomData))
                 {
                     try
                     {
-                        var exists = await _db.GameRoomExistsAsync(roomCode);
-                        if (exists)
+                        // Check DB for room presence regardless of is_active
+                        var existsAny = await _db.GameRoomExistsAnyStatusAsync(roomCode);
+                        if (existsAny)
                         {
                             roomData = new RoomData
                             {
@@ -285,7 +332,7 @@ namespace PokemonQuizAPI.Hubs
                             }
 
                             Rooms[roomCode] = roomData;
-                            _logger.LogInformation("Rehydrated room {RoomCode} from database into memory", roomCode);
+                            _logger.LogInformation("Rehydrated room {RoomCode} from database into memory (any-status)", roomCode);
                         }
                         else
                         {
@@ -301,10 +348,19 @@ namespace PokemonQuizAPI.Hubs
                     }
                 }
 
+                // If a shutdown was scheduled, cancel it because a player rejoined
+                if (ShutdownTokens.TryRemove(roomCode, out var tokenSource))
+                {
+                    try { tokenSource.Cancel(); } catch { }
+                    try { tokenSource.Dispose(); } catch { }
+                    _logger.LogInformation("Cancelled scheduled shutdown for room {RoomCode} because a player rejoined", roomCode);
+                }
+
                 if (roomData.GameStarted)
                 {
-                    await Clients.Caller.SendAsync("Error", "Game already started.");
-                    return;
+                    // allow join even if game started in rehydrate scenario, but callers may handle error
+                    // do not reject here; allow caller to rehydrate state
+                    // we won't send the "Game already started" error here to allow reconnects
                 }
 
                 if (roomData.Players.Any(p => p.Name.Equals(playerName, StringComparison.OrdinalIgnoreCase)))
@@ -387,25 +443,72 @@ namespace PokemonQuizAPI.Hubs
                 roomData.Players.Remove(player);
                 await Groups.RemoveFromGroupAsync(Context.ConnectionId, roomCode);
 
-                if (player.IsHost || roomData.Players.Count == 0)
+                if (roomData.Players.Count == 0)
                 {
-                    Rooms.TryRemove(roomCode, out _);
-                    // Mark room ended in database
-                    try
+                    // schedule shutdown after grace period
+                    var cts = new CancellationTokenSource();
+                    if (!ShutdownTokens.TryAdd(roomCode, cts))
                     {
-                        // If you want to mark ended, implement Update to set ended_at (not implemented in DB helper yet)
-                        // await _db.EndGameRoomAsync(roomCode);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "Failed to mark room {RoomCode} ended in database", roomCode);
+                        try { cts.Dispose(); } catch { }
+                        return;
                     }
 
-                    await Clients.Group(roomCode).SendAsync("RoomClosed", "Host left the room — room closed.");
-                    _logger.LogInformation("Room {RoomCode} closed (host left)", roomCode);
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            var delay = TimeSpan.FromMinutes(2); // 2 minute grace
+                            _logger.LogInformation("Scheduled shutdown for room {RoomCode} in {Delay}", roomCode, delay);
+                            await Task.Delay(delay, cts.Token);
+
+                            // perform shutdown
+                            Rooms.TryRemove(roomCode, out _);
+                            try
+                            {
+                                await _db.EndGameRoomAsync(roomCode);
+                                _logger.LogInformation("Marked room {RoomCode} inactive in DB after grace period", roomCode);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogWarning(ex, "Failed to mark room {RoomCode} inactive in DB", roomCode);
+                            }
+
+                            try
+                            {
+                                await Clients.Group(roomCode).SendAsync("RoomClosed", "Room closed due to inactivity.");
+                            }
+                            catch { }
+                        }
+                        catch (TaskCanceledException)
+                        {
+                            _logger.LogInformation("Shutdown for room {RoomCode} canceled because a player rejoined", roomCode);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, "Error during scheduled shutdown for room {RoomCode}", roomCode);
+                        }
+                        finally
+                        {
+                            if (ShutdownTokens.TryRemove(roomCode, out var removed))
+                            {
+                                try { removed.Dispose(); } catch { }
+                            }
+                        }
+                    });
+
+                    _logger.LogInformation("Room {RoomCode} has no players; scheduled shutdown", roomCode);
                 }
                 else
                 {
+                    // If host left but players remain, assign new host
+                    if (player.IsHost && roomData.Players.Count > 0)
+                    {
+                        var newHost = roomData.Players[0];
+                        newHost.IsHost = true;
+                        _logger.LogInformation("Host left room {RoomCode}; new host is {NewHost}", roomCode, newHost.Name);
+                        await Clients.Group(roomCode).SendAsync("NewHost", newHost.Name);
+                    }
+
                     await Clients.Group(roomCode).SendAsync("PlayerLeft", new
                     {
                         playerName = player.Name,
@@ -676,20 +779,19 @@ namespace PokemonQuizAPI.Hubs
 
                 var correct = selectedValue == correctValue;
 
-                int points = 0;
-                if (correct)
-                {
-                    points = 100;
-                    var bonus = Math.Max(0, 500 - timeTakenMs) / 5;
-                    points += bonus;
-                }
+                // compute points: base + speed bonus depending on timeTakenMs
+                int basePoints = 1000;
+                int maxBonus = 500;
+                var timeLeftMs = Math.Max(0, QuestionTimeoutMs - timeTakenMs);
+                var speedBonus = (int)Math.Round((timeLeftMs / (double)QuestionTimeoutMs) * maxBonus);
+                int points = correct ? basePoints + speedBonus : 0;
 
                 player.Score += points;
 
-                // store playerName with submission so clients can display who answered what
-                roomData.Submissions[Context.ConnectionId] = new { selectedValue, timeTakenMs, correct, playerName = player.Name };
+                // store playerName and points with submission so clients can display who answered what and awarded points
+                roomData.Submissions[Context.ConnectionId] = new { selectedValue, timeTakenMs, correct, playerName = player.Name, points };
 
-                _logger.LogInformation("Player {Player} submitted {Value} (correct={Correct}) in room {RoomCode}", player.Name, selectedValue, correct, roomCode);
+                _logger.LogInformation("Player {Player} submitted {Value} (correct={Correct}) in room {RoomCode} and earned {Points}", player.Name, selectedValue, correct, roomCode, points);
 
                 try
                 {
@@ -751,13 +853,15 @@ namespace PokemonQuizAPI.Hubs
                     .OrderByDescending(p => p.Score)
                     .ToList();
 
-                // Broadcast game over with leaderboard
-                await Clients.Group(roomCode).SendAsync("GameOver", leaderboard);
+                // Broadcast game over with leaderboard and roomCode (so clients can offer replay)
+                await Clients.Group(roomCode).SendAsync("GameOver", new { leaderboard, roomCode });
 
                 // Optionally mark room ended in DB (not implemented)
                 roomData.GameStarted = false;
                 roomData.CurrentQuestion = null;
                 roomData.QuestionStartedAt = null;
+
+                _logger.LogInformation("Room {RoomCode} game ended by request; GameOver broadcast sent", roomCode);
             }
             catch (Exception ex)
             {
@@ -941,47 +1045,24 @@ namespace PokemonQuizAPI.Hubs
             }
         }
 
-        // Helper to convert normalized JObject into a plain serializable object
-        private object ConvertNormalizedToPlainObject(JObject normalized)
+        // Expose a snapshot of room state for admin tooling
+        public static List<object> GetRoomsSnapshot()
         {
-            var pokemonName = normalized.SelectToken("pokemonName")?.ToString() ?? string.Empty;
-            var imageUrl = normalized.SelectToken("image_Url")?.ToString() ?? string.Empty;
-            var statToGuess = normalized.SelectToken("statToGuess")?.ToString() ?? string.Empty;
-            var correctToken = normalized.SelectToken("correctValue");
-            int correctValue = 0;
-            if (correctToken != null)
+            return Rooms.Values.Select(r => new
             {
-                if (correctToken.Type == JTokenType.Integer || correctToken.Type == JTokenType.Float)
-                    correctValue = correctToken.ToObject<int>();
-                else int.TryParse(correctToken.ToString(), out correctValue);
-            }
+                roomCode = r.RoomCode,
+                players = r.Players.Select(p => new { p.Name, p.Score, p.IsHost, p.ConnectionId }).ToList(),
+                gameStarted = r.GameStarted,
+                selectedGameId = r.SelectedGameId,
+                createdAt = r.CreatedAt,
+                questionStartedAt = r.QuestionStartedAt
+            }).ToList<object>();
+        }
 
-            var other = new List<object>();
-            var ovToken = normalized.SelectToken("otherValues");
-            if (ovToken is JArray arr)
-            {
-                foreach (var item in arr)
-                {
-                    var stat = item.SelectToken("stat")?.ToString() ?? string.Empty;
-                    var valToken = item.SelectToken("value") ?? item.SelectToken("Value");
-                    int val = 0;
-                    if (valToken != null)
-                    {
-                        if (valToken.Type == JTokenType.Integer || valToken.Type == JTokenType.Float) val = valToken.ToObject<int>();
-                        else int.TryParse(valToken.ToString(), out val);
-                    }
-                    other.Add(new { stat, value = val });
-                }
-            }
-
-            return new
-            {
-                pokemonName,
-                image_Url = imageUrl,
-                statToGuess,
-                correctValue,
-                otherValues = other
-            };
+        // Allow admin/backend to forcibly remove a room from memory
+        public static bool TryRemoveRoom(string roomCode)
+        {
+            return Rooms.TryRemove(roomCode.ToUpper(), out _);
         }
     }
 }

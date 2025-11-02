@@ -104,6 +104,7 @@ export default function MultiplayerPokemonGame() {
             try { connection.off("ScoreUpdated"); } catch {}
             try { connection.off("AllAnswered"); } catch {}
             try { connection.off("GameOver"); } catch {}
+            try { connection.off("gameover"); } catch {}
             try { connection.off("RoomJoined"); } catch {}
             try { connection.off("Error"); } catch {}
 
@@ -161,6 +162,30 @@ export default function MultiplayerPokemonGame() {
                     return;
                 }
                 console.warn('Server Error', msg);
+            });
+
+            connection.on("GameOver", (payload: any) => {
+                console.debug('SignalR GameOver payload:', payload);
+                try {
+                    const leaderboard = payload?.leaderboard ?? payload;
+                    const rc = payload?.roomCode ?? roomCode;
+                    const leaderboardStr = JSON.stringify(leaderboard);
+                    // navigate to GameOver screen with leaderboard and roomCode
+                    try { router.replace({ pathname: '/pages/GameOver', params: { leaderboard: leaderboardStr, roomCode: rc } } as any); } catch { router.push({ pathname: '/pages/GameOver', params: { leaderboard: leaderboardStr, roomCode: rc } } as any); }
+                } catch (e) {
+                    console.warn('Failed to handle GameOver payload', e);
+                }
+            });
+            connection.on("gameover", (payload: any) => {
+                console.debug('SignalR gameover payload:', payload);
+                try {
+                    const leaderboard = payload?.leaderboard ?? payload;
+                    const rc = payload?.roomCode ?? roomCode;
+                    const leaderboardStr = JSON.stringify(leaderboard);
+                    try { router.replace({ pathname: '/pages/GameOver', params: { leaderboard: leaderboardStr, roomCode: rc } } as any); } catch { router.push({ pathname: '/pages/GameOver', params: { leaderboard: leaderboardStr, roomCode: rc } } as any); }
+                } catch (e) {
+                    console.warn('Failed to handle gameover payload', e);
+                }
             });
 
             // Try to rehydrate room info (this will also inform whether the game already started)

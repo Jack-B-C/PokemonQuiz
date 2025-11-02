@@ -1,0 +1,58 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Admin Dashboard</title>
+    <style>
+      body { font-family: Arial, Helvetica, sans-serif; margin:0; }
+      .sidebar { width:200px; background:#0b2b5a; color:#fff; height:100vh; padding:20px; box-sizing:border-box; float:left }
+      .content { margin-left:200px; padding:20px }
+      .card { background:#fff; padding:16px; border-radius:6px; box-shadow:0 2px 6px rgba(0,0,0,0.1); margin-bottom:12px }
+      table { width:100%; border-collapse:collapse }
+      th,td { padding:8px; border-bottom:1px solid #eee }
+      .btn { display:inline-block; padding:8px 12px; background:#123e7a; color:#fff; border-radius:6px; text-decoration:none }
+    </style>
+  </head>
+  <body>
+    <div class="sidebar">
+      <h2>Admin Dashboard</h2>
+      <p><a href="#" style="color:#fff; text-decoration:none">Dashboard</a></p>
+      <p><a href="#rooms" style="color:#fff; text-decoration:none">Rooms</a></p>
+      <p><a href="#users" style="color:#fff; text-decoration:none">Users</a></p>
+    </div>
+    <div class="content">
+      <h1>Dashboard</h1>
+      <div id="metrics"></div>
+      <h2>Active Rooms</h2>
+      <div id="rooms"></div>
+    </div>
+
+    <script>
+      async function refresh() {
+        const res = await fetch('/api/admin/dashboard');
+        const data = await res.json();
+        document.getElementById('metrics').innerHTML = `Active rooms: ${data.activeRooms} &mdash; Active players: ${data.activePlayers}`;
+
+        const roomsDiv = document.getElementById('rooms');
+        roomsDiv.innerHTML = '';
+        data.rooms.forEach(r => {
+          const div = document.createElement('div');
+          div.className = 'card';
+          const players = (r.players || []).map(p => p.Name || p.name || '').join(', ');
+          div.innerHTML = `<strong>${r.roomCode}</strong><div>Game: ${r.selectedGameId || ''}</div><div>Players: ${players}</div><div style="margin-top:8px"><button onclick="endRoom('${r.roomCode}')" class="btn">End Room</button></div>`;
+          roomsDiv.appendChild(div);
+        });
+      }
+
+      async function endRoom(code) {
+        if (!confirm('End room ' + code + '?')) return;
+        const res = await fetch('/api/admin/rooms/' + encodeURIComponent(code) + '/end', { method: 'POST' });
+        if (res.ok) refresh(); else alert('Failed');
+      }
+
+      refresh();
+      setInterval(refresh, 5000);
+    </script>
+  </body>
+</html>
