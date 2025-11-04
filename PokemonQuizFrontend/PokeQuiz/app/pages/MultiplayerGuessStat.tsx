@@ -14,10 +14,17 @@ import {
 import { colors } from "../../styles/colours";
 import Navbar from "@/components/Navbar";
 import AppButton from "@/components/AppButton";
-import { Audio } from "expo-av";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import * as SignalR from "@microsoft/signalr";
 import { ensureConnection, getConnection } from '../../utils/signalrClient';
+
+let Audio: any = null;
+try {
+    // Attempt dynamic import of new packages if present; fall back gracefully
+    Audio = require('expo-av').Audio;
+} catch (e) {
+    try { Audio = (require('expo-audio').Audio); } catch { Audio = null; }
+}
 
 type StatOption = {
     stat: string;
@@ -188,6 +195,31 @@ export default function MultiplayerPokemonGame() {
                 }
             });
 
+            // Ensure clients close leaderboard and rehydrate when a new game is started
+            connection.on("GameStarted", async (payload: any) => {
+                console.debug('SignalR GameStarted payload:', payload);
+                try {
+                    // Close any open leaderboard modal
+                    setShowLeaderboard(false);
+                    setShowResult(false);
+                    setWaitingForOthers(false);
+
+                    // Rehydrate current question from server to ensure sync
+                    try {
+                        const info = await connection.invoke('GetRoomInfo', roomCode);
+                        if (info && info.currentQuestion) {
+                            const startedAt = info.questionStartedAt ? Date.parse(info.questionStartedAt as string) : NaN;
+                            if (!isNaN(startedAt)) handleNewQuestion(info.currentQuestion, startedAt);
+                            else handleNewQuestion(info.currentQuestion);
+                        }
+                    } catch (e) {
+                        console.warn('Failed to rehydrate room after GameStarted', e);
+                    }
+                } catch (e) {
+                    console.warn('Error handling GameStarted', e);
+                }
+            });
+
             // Try to rehydrate room info (this will also inform whether the game already started)
             try {
                 const info = await connection.invoke('GetRoomInfo', roomCode);
@@ -334,17 +366,19 @@ export default function MultiplayerPokemonGame() {
          }
 
          try {
-             const { sound } = await Audio.Sound.createAsync(
-                 correct
-                     ? require("../../assets/sounds/correct.mp3")
-                     : require("../../assets/sounds/incorrect.mp3")
-             );
-             await sound.playAsync();
-             sound.setOnPlaybackStatusUpdate((status) => {
-                 if (status.isLoaded && status.didJustFinish) {
-                     sound.unloadAsync();
-                 }
-             });
+             if (Audio) {
+                 const { sound } = await Audio.Sound.createAsync(
+                     correct
+                         ? require("../../assets/sounds/correct.mp3")
+                         : require("../../assets/sounds/incorrect.mp3")
+                 );
+                 await sound.playAsync();
+                 sound.setOnPlaybackStatusUpdate((status: any) => {
+                     if (status.isLoaded && status.didJustFinish) {
+                         sound.unloadAsync();
+                     }
+                 });
+             }
          } catch (error) {
              console.warn("Sound failed", error);
          }
@@ -463,6 +497,52 @@ export default function MultiplayerPokemonGame() {
         );
     }
 
+    // sort players for leaderboard display
+    const sortedPlayers = [...players].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+
+    // Host Play Again helper
+    const handleHostPlayAgain = async () => {
+        const conn = getConnection();
+        // proactively close leaderboard for host to avoid stale modal
+        setShowLeaderboard(false);
+        setShowResult(false);
+        setWaitingForOthers(false);
+
+        if (!conn) {
+            try {
+                const connection = await ensureConnection(`http://${serverIp}:5168/hubs/game`);
+                await connection.invoke('StartGame', roomCode);
+            } catch (e) {
+                console.warn('PlayAgain failed', e);
+            }
+            return;
+        }
+
+        try {
+            await conn.invoke('StartGame', roomCode);
+        } catch (e) {
+            console.warn('PlayAgain invoke failed', e);
+        }
+    };
+
+    // Leave or disband
+    const handleLeaveOrDisband = async (disband: boolean) => {
+        const conn = getConnection();
+        try {
+            if (conn) {
+                try { await conn.invoke('LeaveRoom', roomCode); } catch { }
+                if (disband) {
+                    try { await conn.invoke('EndGame', roomCode); } catch { }
+                }
+                await conn.stop();
+            }
+        } catch (e) {
+            console.warn('Leave/disband failed', e);
+        }
+        // navigate out
+        try { router.replace('/pages/ChooseGame'); } catch { router.push('/'); }
+    };
+
     return (
         <View style={styles.container}>
             <Navbar title="Multiplayer Quiz" onBack={handleBack} />
@@ -529,25 +609,31 @@ export default function MultiplayerPokemonGame() {
                         {roundResults ? (
                             <ScrollView style={styles.leaderboardScroll}>
                                 {roundResults.map((r, i) => (
-                                    <View key={i} style={styles.leaderboardRow}>
-                                        <Text style={styles.leaderboardName}>{r.name}</Text>
-                                        <Text style={r.correct ? styles.correctBanner : styles.incorrectBanner}>
+                                    <View key={i} style={styles.leaderboardRowSmall}>
+                                        <Text style={styles.leaderboardNameSmall}>{r.name}</Text>
+                                        <Text style={r.correct ? styles.correctText : styles.incorrectText}>
                                             {r.correct ? "✔️" : "❌"} {r.answer !== null && r.answer !== -1 ? r.answer : "No Answer"}
                                         </Text>
                                     </View>
                                 ))}
                             </ScrollView>
                         ) : null}
+
                         <Text style={[styles.modalTitle, { fontSize: 22, marginTop: 10 }]}>Leaderboard</Text>
                         <ScrollView style={styles.leaderboardScroll}>
-                            {players.map((player, index) => (
-                                <View key={index} style={styles.leaderboardRow}>
-                                    <Text style={styles.leaderboardRank}>#{index + 1}</Text>
-                                    <Text style={styles.leaderboardName}>{player.name}</Text>
-                                    <Text style={styles.leaderboardScore}>{player.score}</Text>
+                            {sortedPlayers.map((player, index) => (
+                                <View key={index} style={[styles.leaderboardRow, index === 0 ? styles.topPlayerRow : null]}>
+                                    <Text style={styles.leaderboardRank}>{index === 0 ? '🥇' : `#${index + 1}`}</Text>
+                                    <Text style={[styles.leaderboardName, index === 0 ? styles.topPlayerName : null]}>{player.name}</Text>
+                                    <View style={styles.scorePill}>
+                                        <Text style={styles.leaderboardScore}>{player.score}</Text>
+                                    </View>
                                 </View>
                             ))}
                         </ScrollView>
+
+                        <View style={{ marginTop: 8 }} />
+
                         {isHost ? (
                             <AppButton
                                 label={currentRound >= MAX_ROUNDS ? "End Game" : "Next Question"}
@@ -557,6 +643,16 @@ export default function MultiplayerPokemonGame() {
                         ) : (
                             <Text style={styles.waitingText}>Waiting for host...</Text>
                         )}
+
+                        {/* Small action row for replay and leave */}
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 12, marginTop: 12 }}>
+                            {isHost && (
+                                <AppButton label="Play Again" onPress={handleHostPlayAgain} style={{ flex: 1 }} />
+                            )}
+                            <AppButton label="Back to Lobby" onPress={() => { try { router.replace({ pathname: '/pages/WaitingRoom', params: { roomCode, playerName } } as any); } catch { router.push('/pages/WaitingRoom'); } }} style={{ flex: 1 }} />
+                            <AppButton label="Leave" onPress={() => handleLeaveOrDisband(false)} style={{ flex: 1, backgroundColor: '#ef4444' }} />
+                        </View>
+
                     </View>
                 </View>
             </Modal>
@@ -693,6 +789,8 @@ const styles = StyleSheet.create({
         backgroundColor: colors.surface || "#1f2937",
         borderRadius: 16,
         padding: 24,
+        // web-friendly box shadow and Android elevation
+        elevation: 8,
     },
     modalTitle: {
         fontSize: 28,
@@ -706,38 +804,58 @@ const styles = StyleSheet.create({
         marginBottom: 20,
     },
     leaderboardRow: {
-        flexDirection: "row",
-        justifyContent: "space-between",
-        alignItems: "center",
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
         paddingVertical: 12,
         paddingHorizontal: 16,
-        backgroundColor: colors.background || "#151515",
+        backgroundColor: colors.surface || '#111827',
         borderRadius: 8,
         marginBottom: 8,
     },
+    topPlayerRow: {
+        backgroundColor: '#0b1220',
+        borderWidth: 1,
+        borderColor: colors.primary || '#3b82f6',
+    },
     leaderboardRank: {
         fontSize: 18,
-        fontWeight: "700",
-        color: colors.primary || "#3b82f6",
-        width: 40,
+        fontWeight: '700',
+        color: colors.primary || '#3b82f6',
+        width: 48,
+        textAlign: 'center',
     },
     leaderboardName: {
         fontSize: 18,
-        fontWeight: "600",
+        fontWeight: '600',
         flex: 1,
-        color: colors.text || "#fff",
+        color: colors.text || '#fff',
+    },
+    topPlayerName: {
+        color: '#fff',
+        fontSize: 20,
+    },
+    scorePill: {
+        backgroundColor: '#111827',
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 20,
     },
     leaderboardScore: {
-        fontSize: 18,
-        fontWeight: "700",
-        color: colors.accent || "#fbbf24",
-    },
-    nextButton: {
-        width: "100%",
-    },
-    waitingText: {
-        textAlign: "center",
         fontSize: 16,
-        color: colors.muted || "#9ca3af",
+        fontWeight: '700',
+        color: colors.accent || '#fbbf24',
     },
+    leaderboardRowSmall: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        paddingVertical: 8,
+        paddingHorizontal: 6,
+        marginBottom: 6,
+    },
+    leaderboardNameSmall: { color: colors.text || '#fff' },
+    correctText: { color: '#10b981' },
+    incorrectText: { color: '#ef4444' },
+    nextButton: { width: '100%' },
+    waitingText: { textAlign: 'center', fontSize: 16, color: colors.muted || '#9ca3af' },
 });

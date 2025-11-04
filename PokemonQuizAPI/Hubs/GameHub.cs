@@ -44,6 +44,9 @@ namespace PokemonQuizAPI.Hubs
 
             // Track submissions for current question (ConnectionId -> payload)
             public Dictionary<string, object> Submissions { get; set; } = new();
+
+            // Current persistent game session id (DB or file-backed)
+            public string? CurrentSessionId { get; set; }
         }
 
         // Helper: normalize an incoming question JObject to a consistent outgoing shape
@@ -263,6 +266,16 @@ namespace PokemonQuizAPI.Hubs
                 roomData.SelectedGameId = gameId;
 
                 _logger.LogInformation("Host selected game {GameId} for room {RoomCode}", gameId, roomCode);
+
+                // Persist selection to DB if available
+                try
+                {
+                    await _db.UpdateGameRoomGameIdAsync(roomCode, gameId);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to persist selected game id {GameId} for room {RoomCode}", gameId, roomCode);
+                }
 
                 // Broadcast selected game to all clients in room
                 await Clients.Group(roomCode).SendAsync("GameSelected", gameId);
@@ -542,6 +555,12 @@ namespace PokemonQuizAPI.Hubs
                     return;
                 }
 
+                // reset players' scores when starting a new game
+                foreach (var p in roomData.Players)
+                {
+                    p.Score = 0;
+                }
+
                 // Try to generate the first question before marking the game as started
                 JObject? questionObj = null;
                 try
@@ -570,6 +589,19 @@ namespace PokemonQuizAPI.Hubs
 
                 try
                 {
+                    // Create and persist a GameSession for this room/game
+                    try
+                    {
+                        var sessionId = Guid.NewGuid().ToString();
+                        roomData.CurrentSessionId = sessionId;
+                        // store session with initial score 0; userId null for room session
+                        await _db.CreateGameSessionAsync(sessionId, roomData.SelectedGameId, null, roomCode, 0, DateTime.UtcNow);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to create persistent GameSession for room {RoomCode}", roomCode);
+                    }
+
                     // Normalize and store the generated question, then broadcast
                     var normalized = BuildNormalizedQuestion(questionObj);
                     roomData.CurrentQuestion = normalized;
@@ -793,6 +825,20 @@ namespace PokemonQuizAPI.Hubs
 
                 _logger.LogInformation("Player {Player} submitted {Value} (correct={Correct}) in room {RoomCode} and earned {Points}", player.Name, selectedValue, correct, roomCode, points);
 
+                // Persist best score for session (use max player score)
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(roomData.CurrentSessionId))
+                    {
+                        var best = roomData.Players.Max(p => p.Score);
+                        await _db.UpdateGameSessionScoreAsync(roomData.CurrentSessionId, best);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to update GameSession score for room {RoomCode}", roomCode);
+                }
+
                 try
                 {
                     await Clients.Group(roomCode).SendAsync("ScoreUpdated", new
@@ -856,10 +902,35 @@ namespace PokemonQuizAPI.Hubs
                 // Broadcast game over with leaderboard and roomCode (so clients can offer replay)
                 await Clients.Group(roomCode).SendAsync("GameOver", new { leaderboard, roomCode });
 
-                // Optionally mark room ended in DB (not implemented)
+                // Persist final session score and end session
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(roomData.CurrentSessionId))
+                    {
+                        var final = roomData.Players.Any() ? roomData.Players.Max(p => p.Score) : 0;
+                        await _db.UpdateGameSessionScoreAsync(roomData.CurrentSessionId, final);
+                        await _db.EndGameSessionAsync(roomData.CurrentSessionId, DateTime.UtcNow);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to finalize GameSession for room {RoomCode}", roomCode);
+                }
+
+                // Persist room ended in DB
+                try
+                {
+                    await _db.EndGameRoomAsync(roomCode);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to mark room {RoomCode} ended in DB during EndGame", roomCode);
+                }
+
                 roomData.GameStarted = false;
                 roomData.CurrentQuestion = null;
                 roomData.QuestionStartedAt = null;
+                roomData.CurrentSessionId = null;
 
                 _logger.LogInformation("Room {RoomCode} game ended by request; GameOver broadcast sent", roomCode);
             }
@@ -884,6 +955,20 @@ namespace PokemonQuizAPI.Hubs
                     return;
 
                 player.Score += scoreChange;
+
+                // Persist best score for session (use max player score)
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(roomData.CurrentSessionId))
+                    {
+                        var best = roomData.Players.Max(p => p.Score);
+                        await _db.UpdateGameSessionScoreAsync(roomData.CurrentSessionId, best);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to update GameSession score for room {RoomCode}", roomCode);
+                }
 
                 await Clients.Group(roomCode).SendAsync("ScoreUpdated", new
                 {

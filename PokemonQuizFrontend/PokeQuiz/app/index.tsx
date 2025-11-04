@@ -53,7 +53,7 @@ export default function HomeScreen() {
                 <TouchableOpacity
                     style={styles.loginButton}
                     activeOpacity={0.7}
-                    onPress={() => router.push("/pages/Mode")}
+                    onPress={() => router.push("/pages/Login")}
                 >
                     <Icon name="person-circle-outline" size={40} color={colors.primary} />
                 </TouchableOpacity>

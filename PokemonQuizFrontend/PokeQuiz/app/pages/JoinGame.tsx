@@ -1,4 +1,4 @@
-﻿import React, { useState } from "react";
+﻿import React, { useState, useEffect } from "react";
 import { View, Text, StyleSheet, TextInput, Alert } from "react-native";
 import { colors } from "../../styles/colours";
 import Navbar from "@/components/Navbar";
@@ -13,6 +13,16 @@ export default function JoinGame() {
     const roomCode = params.roomCode as string;
 
     const [playerName, setPlayerName] = useState("");
+    const [locked, setLocked] = useState(false);
+
+    useEffect(() => {
+        // If user is logged in, use their account username and lock the field
+        const uname = (global as any).username as string | undefined;
+        if (uname) {
+            setPlayerName(uname.slice(0, MAX_NAME_LENGTH));
+            setLocked(true);
+        }
+    }, []);
 
     const handleJoin = () => {
         const trimmed = playerName.trim();
@@ -22,6 +32,14 @@ export default function JoinGame() {
         }
         if (trimmed.length > MAX_NAME_LENGTH) {
             Alert.alert("Error", `Name too long. Max ${MAX_NAME_LENGTH} characters.`);
+            return;
+        }
+
+        // If not logged in, redirect to Login and then return here
+        const uname = (global as any).username as string | undefined;
+        if (!uname) {
+            // send user to login; after login they should be returned to this page
+            router.push({ pathname: '/pages/Login', params: { returnTo: `/pages/JoinGame?roomCode=${roomCode}` } } as any);
             return;
         }
 
@@ -38,11 +56,12 @@ export default function JoinGame() {
                 <Text style={styles.roomLabel}>ROOM: {roomCode}</Text>
                 <Text style={styles.subtitle}>Enter your name to join</Text>
                 <TextInput
-                    style={styles.nameInput}
+                    style={[styles.nameInput, locked && { backgroundColor: '#eee' }]}
                     placeholder="Your Name"
                     placeholderTextColor="#999"
                     value={playerName}
-                    onChangeText={(text) => setPlayerName(text.slice(0, MAX_NAME_LENGTH))}
+                    onChangeText={(text) => { if (!locked) setPlayerName(text.slice(0, MAX_NAME_LENGTH)); }}
+                    editable={!locked}
                 />
                 <AppButton label="Join Room" onPress={handleJoin} />
             </View>
