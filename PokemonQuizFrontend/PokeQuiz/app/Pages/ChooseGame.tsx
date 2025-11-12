@@ -1,8 +1,8 @@
-import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Image, Platform, Alert, Dimensions } from 'react-native';
+import * as React from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Image, Platform, Alert, Dimensions, StatusBar, ScrollView } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { colors } from '../../styles/colours';
-import Navbar from '@/components/Navbar';
+import Navbar from '../../components/Navbar';
 import { getConnection, ensureConnection } from '../../utils/signalrClient';
 import * as SignalR from '@microsoft/signalr';
 
@@ -16,10 +16,20 @@ export default function ChooseGame() {
     const playerName = typeof params.playerName === 'string' ? params.playerName : '';
     const isHost = String(params.isHost ?? '') === 'true';
 
+    // back handler inside component so router is in scope
+    const handleBack = () => {
+        try {
+            router.replace({ pathname: "/pages/Mode" } as any);
+        } catch {
+            try { router.back(); } catch { }
+        }
+    };
+
+    const topOffset = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) : 0;
+
     const games = [
-        { id: 'guess-type', name: 'Guess the Type', image: require('../../assets/images/charizard.png') },
         { id: 'guess-stats', name: 'Guess the Stats', image: require('../../assets/images/charizard.png'), page:'/pages/GuessStat' },
-        { id: 'who-that-pokemon', name: "Who's That Pokémon?", image: require('../../assets/images/charizard.png') },
+        { id: 'higher-or-lower', name: 'Higher or Lower', image: require('../../assets/images/charizard.png'), page: '/pages/HigherOrLowerSingle' }
     ];
 
     const handleGameSelect = async (gameId: string) => {
@@ -95,29 +105,31 @@ export default function ChooseGame() {
     };
 
     return (
-        <View style={styles.container}>
-            <Navbar title={isMultiplayer ? `Choose Game (Room: ${roomCode})` : 'Choose Game'} />
-            <View style={[styles.content, { paddingTop: 16 + (Platform.OS === 'android' ? 0 : 0) }]}>
-                <Text style={styles.title}>
-                    {isMultiplayer ? 'Select a Game Mode for Your Room' : 'Select a Game Mode'}
-                </Text>
-                <Text style={styles.subtitle}>
-                    {isMultiplayer ? 'Pick a game for everyone to play together!' : 'Pick a game to play!'}
-                </Text>
-                <View style={styles.gamesContainer}>
-                    {games.map((game) => (
-                        <TouchableOpacity
-                            key={game.id}
-                            style={styles.gameCard}
-                            onPress={() => handleGameSelect(game.id)}
-                            activeOpacity={0.85}
-                        >
-                            <Image source={game.image} style={styles.gameImage} resizeMode="contain" />
-                            <Text style={styles.gameName}>{game.name}</Text>
-                        </TouchableOpacity>
-                    ))}
+        <View style={[styles.container, { paddingTop: topOffset }]}>
+            <Navbar title={isMultiplayer ? `Choose Game (Room: ${roomCode})` : 'Choose Game'} onBack={handleBack} />
+            <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={true}>
+                <View style={[styles.content, { paddingTop: 16 }]}>
+                    <Text style={styles.title}>
+                        {isMultiplayer ? 'Select a Game Mode for Your Room' : 'Select a Game Mode'}
+                    </Text>
+                    <Text style={styles.subtitle}>
+                        {isMultiplayer ? 'Pick a game for everyone to play together!' : 'Pick a game to play!'}
+                    </Text>
+                    <View style={styles.gamesContainer}>
+                        {games.map((game) => (
+                            <TouchableOpacity
+                                key={game.id}
+                                style={[styles.gameCard, { alignSelf: 'center' }]}
+                                onPress={() => handleGameSelect(game.id)}
+                                activeOpacity={0.85}
+                            >
+                                <Image source={game.image} style={styles.gameImage} resizeMode="contain" />
+                                <Text style={styles.gameName}>{game.name}</Text>
+                            </TouchableOpacity>
+                        ))}
+                    </View>
                 </View>
-            </View>
+            </ScrollView>
         </View>
     );
 }
@@ -127,8 +139,11 @@ const styles = StyleSheet.create({
         flex: 1,
         backgroundColor: colors.background || '#151515',
     },
+    scrollContent: {
+        flexGrow: 1,
+        justifyContent: 'center',
+    },
     content: {
-        flex: 1,
         padding: 16,
         alignItems: 'center',
         justifyContent: 'flex-start',
@@ -150,20 +165,16 @@ const styles = StyleSheet.create({
         fontWeight: '500',
     },
     gamesContainer: {
-        flexDirection: width < 600 ? 'column' : 'row',
-        flexWrap: 'wrap',
-        justifyContent: 'center',
-        alignItems: 'center',
-        gap: 18,
         width: '100%',
+        alignItems: 'center',
     },
     gameCard: {
-        width: width < 600 ? '90%' : 280,
+        width: Math.min(320, width * 0.9),
         backgroundColor: colors.primary || '#FF5252',
         borderRadius: 20,
         padding: 20,
         alignItems: 'center',
-        marginBottom: 18,
+        marginVertical: 12,
         shadowColor: '#000',
         shadowOpacity: 0.18,
         shadowRadius: 8,

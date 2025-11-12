@@ -2,7 +2,7 @@
 // Reusable button component for consistent styling and behavior across the app.
 
 import React from "react";
-import { TouchableOpacity, Text, StyleSheet, ViewStyle, TextStyle } from "react-native";
+import { TouchableOpacity, Text, StyleSheet, ViewStyle, TextStyle, StyleProp } from "react-native";
 
 // Define the expected props (inputs) for this component.
 type Props = {
@@ -11,8 +11,8 @@ type Props = {
     disabled?: boolean;             // Optional: disable the button
     backgroundColor?: string;       // Optional background color (defaults to red)
     textColor?: string;             // Optional text color (defaults to white)
-    style?: ViewStyle;              // Optional additional container styles (e.g. margin)
-    textStyle?: TextStyle;          // Optional text styling (e.g. fontSize override)
+    style?: StyleProp<ViewStyle>;   // Optional additional container styles (e.g. margin)
+    textStyle?: StyleProp<TextStyle>; // Optional text styling (e.g. fontSize override)
 };
 
 // The main AppButton component
@@ -60,6 +60,6 @@ const styles = StyleSheet.create({
     text: {
         fontSize: 18,                // Default font size
         fontWeight: "bold",          // Bold text for emphasis
-        textTransform: "uppercase",  // Converts label to uppercase automatically
+        textTransform: "none",  // Do not force uppercase
     },
 });

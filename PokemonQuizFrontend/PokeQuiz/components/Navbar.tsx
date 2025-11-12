@@ -1,5 +1,6 @@
 import React from "react";
-import { View, Text, StyleSheet, TouchableOpacity, Platform, StatusBar, SafeAreaView } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Platform, StatusBar } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from "../styles/colours";
 import Icon from "react-native-vector-icons/Ionicons";
 import { router } from 'expo-router';
@@ -7,13 +8,23 @@ import { router } from 'expo-router';
 type Props = {
     title: string;
     onBack?: () => void;
+    backTo?: string; // optional path to navigate to instead of history back
 };
 
-export default function Navbar({ title, onBack }: Props) {
+export default function Navbar({ title, onBack, backTo }: Props) {
     const handleBack = () => {
         if (onBack) {
             onBack();
             return;
+        }
+
+        if (backTo) {
+            try {
+                router.replace(backTo as any);
+                return;
+            } catch {
+                // ignore and fallback to back
+            }
         }
 
         // Default: go back in history
@@ -21,20 +32,22 @@ export default function Navbar({ title, onBack }: Props) {
             router.back();
         } catch {
             // Fallback to root if back fails
-            router.push('/');
+            router.push('/' as any);
         }
     };
 
     return (
         <SafeAreaView style={styles.safe}>
             <View style={styles.navbar}>
-                <TouchableOpacity onPress={handleBack} style={styles.backButton}>
-                    <Icon name="arrow-back-outline" size={26} color={colors.white} />
+                <TouchableOpacity onPress={handleBack} style={styles.sideButton} accessibilityRole="button">
+                    <Icon name="arrow-back-outline" size={24} color={colors.white} />
                 </TouchableOpacity>
 
-                <Text numberOfLines={1} ellipsizeMode="tail" style={styles.title}>{title}</Text>
+                <View style={styles.titleContainer}>
+                    <Text numberOfLines={1} ellipsizeMode="tail" style={styles.title}>{title}</Text>
+                </View>
 
-                <View style={{ width: 30 }} />
+                <View style={styles.sideButton} />
             </View>
         </SafeAreaView>
     );
@@ -50,26 +63,28 @@ const styles = StyleSheet.create({
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "space-between",
-        paddingVertical: 12,
-        paddingHorizontal: 16,
+        paddingVertical: 10,
+        paddingHorizontal: 12,
         elevation: 4,
-        // on Android include the status bar height as padding
-        paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0,
+        // include the status bar height on Android so layout is consistent
+        paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) : 0,
+        height: Platform.OS === 'android' ? (56 + (StatusBar.currentHeight ?? 0)) : 56,
     },
-    backButton: {
-        padding: 6,
-        zIndex: 2,
+    sideButton: {
+        width: 40,
+        alignItems: 'flex-start',
+        justifyContent: 'center'
+    },
+    titleContainer: {
+        flex: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingHorizontal: 8
     },
     title: {
         color: colors.white,
         fontSize: 18,
         fontWeight: "700",
         textAlign: "center",
-        position: 'absolute',
-        left: 0,
-        right: 0,
-        alignSelf: 'center',
-        zIndex: 1,
-        paddingHorizontal: 48,
     },
 });

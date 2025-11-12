@@ -99,18 +99,31 @@ export default function WaitingRoom() {
                     setSelectedGame(gameId);
                 });
 
-                connection.on("GameStarted", (gameId: string) => {
-                    console.log('GameStarted', gameId);
+                connection.on("GameStarted", (payload: any) => {
+                    console.log('GameStarted', payload);
+                    // payload may be a string (gameId) or object { gameId, currentQuestion, questionStartedAt }
+                    const gameId = typeof payload === 'string' ? payload : payload?.gameId;
+                    const currentQuestion = typeof payload === 'object' ? payload?.currentQuestion : undefined;
+                    const questionStartedAt = typeof payload === 'object' ? payload?.questionStartedAt : undefined;
+
                     if (gameId === 'guess-stats') {
-                        router.push({ pathname: '/pages/MultiplayerGuessStat', params: { roomCode, playerName, isHost: isHost ? 'true' : 'false' } } as const);
+                        router.push({ pathname: '/pages/MultiplayerGuessStat', params: { roomCode, playerName, isHost: isHost ? 'true' : 'false', initialQuestion: currentQuestion ? JSON.stringify(currentQuestion) : undefined, questionStartedAt } } as const);
+                    } else if (gameId === 'higher-or-lower' || gameId === 'compare-stat') {
+                        router.push({ pathname: '/pages/MultiplayerHigherOrLower', params: { roomCode, playerName, isHost: isHost ? 'true' : 'false', initialQuestion: currentQuestion ? JSON.stringify(currentQuestion) : undefined, questionStartedAt } } as const);
                     } else {
                         Alert.alert('Game starting', `Game ${gameId} starting`);
                     }
                 });
-                connection.on("gamestarted", (gameId: string) => {
-                    console.log('gamestarted', gameId);
+                connection.on("gamestarted", (payload: any) => {
+                    console.log('gamestarted', payload);
+                    const gameId = typeof payload === 'string' ? payload : payload?.gameId;
+                    const currentQuestion = typeof payload === 'object' ? payload?.currentQuestion : undefined;
+                    const questionStartedAt = typeof payload === 'object' ? payload?.questionStartedAt : undefined;
+
                     if (gameId === 'guess-stats') {
-                        router.push({ pathname: '/pages/MultiplayerGuessStat', params: { roomCode, playerName, isHost: isHost ? 'true' : 'false' } } as const);
+                        router.push({ pathname: '/pages/MultiplayerGuessStat', params: { roomCode, playerName, isHost: isHost ? 'true' : 'false', initialQuestion: currentQuestion ? JSON.stringify(currentQuestion) : undefined, questionStartedAt } } as const);
+                    } else if (gameId === 'higher-or-lower' || gameId === 'compare-stat') {
+                        router.push({ pathname: '/pages/MultiplayerHigherOrLower', params: { roomCode, playerName, isHost: isHost ? 'true' : 'false', initialQuestion: currentQuestion ? JSON.stringify(currentQuestion) : undefined, questionStartedAt } } as const);
                     } else {
                         Alert.alert('Game starting', `Game ${gameId} starting`);
                     }
@@ -195,7 +208,7 @@ export default function WaitingRoom() {
 
     return (
         <View style={styles.container}>
-            <Navbar title="Waiting Room" />
+            <Navbar title="Waiting Room" backTo={'/pages/ChooseGame'} />
             <View style={styles.content}>
                 <Text style={styles.title}>Room: {roomCode}</Text>
                 <Text style={styles.selectedGame}>

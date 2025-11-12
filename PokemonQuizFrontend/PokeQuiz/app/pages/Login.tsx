@@ -4,28 +4,24 @@ import { colors } from '../../styles/colours';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import Navbar from '@/components/Navbar';
 import AppButton from '@/components/AppButton';
+import { getToken, setToken, clearToken } from '@/utils/tokenStorage';
 
 export default function LoginPage() {
     const router = useRouter();
     const params = useLocalSearchParams();
     const returnTo = (params as any).returnTo as string | undefined;
+    const signup = (params as any).signup as string | undefined;
 
     const [username, setUsername] = useState('');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [confirm, setConfirm] = useState('');
-    const [isSigningUp, setIsSigningUp] = useState(false);
+    const [isSigningUp, setIsSigningUp] = useState(signup === 'true');
     const [loading, setLoading] = useState(false);
 
-    const apiBase = 'http://localhost:5168';
-
-    useEffect(() => {
-        // If already logged in, go back
-        const u = (global as any).username;
-        if (u) {
-            router.back();
-        }
-    }, []);
+    // use same emulator-friendly host resolution as other pages
+    const serverIp = Platform.OS === 'android' ? '10.0.2.2' : 'localhost';
+    const apiBase = `http://${serverIp}:5168`;
 
     const parseErrorText = async (res: Response) => {
         try {
@@ -43,11 +39,21 @@ export default function LoginPage() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ username: uname, password: pwd })
         });
-        if (!res.ok) throw new Error(await parseErrorText(res));
+        if (!res.ok) {
+            const err = await parseErrorText(res);
+            throw new Error(err || `Login failed (${res.status})`);
+        }
         const data = await res.json();
         (global as any).userToken = data.token;
         (global as any).userId = data.userId;
         (global as any).username = uname;
+        await setToken(data.token);
+    };
+
+    const validatePasswordStrength = (pwd: string) => {
+        if (!pwd || pwd.length < 8) return 'Password must be at least 8 characters';
+        if (!/[A-Za-z]/.test(pwd) || !/[0-9]/.test(pwd)) return 'Password must include letters and numbers';
+        return null;
     };
 
     const handleSubmit = async () => {
@@ -60,6 +66,10 @@ export default function LoginPage() {
             if (!email) { Alert.alert('Validation', 'Email required'); return; }
             if (password !== confirm) { Alert.alert('Validation', 'Passwords do not match'); return; }
 
+            // client-side password policy check so user sees immediate feedback
+            const pwdErr = validatePasswordStrength(password);
+            if (pwdErr) { Alert.alert('Validation', pwdErr); return; }
+
             setLoading(true);
             try {
                 const res = await fetch(`${apiBase}/api/auth/register`, {
@@ -69,15 +79,15 @@ export default function LoginPage() {
                 });
                 if (!res.ok) {
                     const txt = await parseErrorText(res);
-                    throw new Error(txt || 'Register failed');
+                    throw new Error(txt || `Register failed (${res.status})`);
                 }
 
                 // Auto-login after successful registration
                 try {
                     await doLogin(username, password);
                     Alert.alert('Success', 'Account created and logged in');
-                    if (returnTo) router.push(returnTo as any);
-                    else router.back();
+                    if (returnTo) router.replace(returnTo as any);
+                    else router.replace('/pages/Account');
                 } catch (loginErr: any) {
                     Alert.alert('Registered', 'Account created. Please log in.');
                     setIsSigningUp(false);
@@ -92,18 +102,42 @@ export default function LoginPage() {
         setLoading(true);
         try {
             await doLogin(username, password);
-            Alert.alert('Success', 'Logged in');
-            if (returnTo) router.push(returnTo as any);
-            else router.back();
+            if (returnTo) router.replace(returnTo as any);
+            else router.replace('/pages/Account');
         } catch (err: any) {
             console.warn(err);
             Alert.alert('Error', err?.message ?? 'Login failed');
         } finally { setLoading(false); }
     };
 
+    useEffect(() => {
+        // If a token exists, verify it and redirect to Account (or returnTo)
+        (async () => {
+            const token = await getToken();
+            if (!token) return;
+            try {
+                const res = await fetch(`${apiBase}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` } });
+                if (res.ok) {
+                    const js = await res.json();
+                    (global as any).username = js.username;
+                    (global as any).userId = js.id;
+                    (global as any).userToken = token;
+                    if (returnTo) router.replace(returnTo as any);
+                    else router.replace('/pages/Account');
+                } else {
+                    // invalid token -> clear
+                    await clearToken();
+                }
+            } catch (e) {
+                // ignore
+                await clearToken();
+            }
+        })();
+    }, []);
+
     return (
         <View style={styles.container}>
-            <Navbar title={isSigningUp ? 'Sign Up' : 'Login'} />
+            <Navbar title={isSigningUp ? 'Sign Up' : 'Login'} backTo={returnTo ?? '/'} />
             <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.centerArea}>
                 <View style={styles.card}>
                     <Text style={styles.title}>{isSigningUp ? 'Create an account' : 'Welcome back'}</Text>
@@ -134,7 +168,7 @@ export default function LoginPage() {
                         <Text style={styles.link}>{isSigningUp ? 'Have an account? Login' : "Don't have an account? Sign up"}</Text>
                     </TouchableOpacity>
 
-                    <TouchableOpacity style={{ marginTop: 8 }} onPress={() => router.back()}>
+                    <TouchableOpacity style={{ marginTop: 8 }} onPress={() => router.replace('/') }>
                         <Text style={{ color: colors.muted }}>Cancel</Text>
                     </TouchableOpacity>
                 </View>

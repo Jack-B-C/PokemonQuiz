@@ -1,0 +1,244 @@
+<?xml version="1.0"?>
+<doc>
+    <assembly>
+        <name>Microsoft.AspNetCore.SignalR.StackExchangeRedis</name>
+    </assembly>
+    <members>
+        <member name="P:Microsoft.AspNetCore.SignalR.StackExchangeRedis.Internal.RedisChannels.All">
+            <summary>
+            Gets the name of the channel for sending to all connections.
+            </summary>
+            <remarks>
+            The payload on this channel is <see cref="T:Microsoft.AspNetCore.SignalR.StackExchangeRedis.Internal.RedisInvocation"/> objects containing
+            invocations to be sent to all connections
+            </remarks>
+        </member>
+        <member name="P:Microsoft.AspNetCore.SignalR.StackExchangeRedis.Internal.RedisChannels.GroupManagement">
+            <summary>
+            Gets the name of the internal channel for group management messages.
+            </summary>
+        </member>
+        <member name="P:Microsoft.AspNetCore.SignalR.StackExchangeRedis.Internal.RedisChannels.ReturnResults">
+            <summary>
+            Gets the name of the internal channel for receiving client results.
+            </summary>
+        </member>
+        <member name="M:Microsoft.AspNetCore.SignalR.StackExchangeRedis.Internal.RedisChannels.Connection(System.String)">
+            <summary>
+            Gets the name of the channel for sending a message to a specific connection.
+            </summary>
+            <param name="connectionId">The ID of the connection to get the channel for.</param>
+        </member>
+        <member name="M:Microsoft.AspNetCore.SignalR.StackExchangeRedis.Internal.RedisChannels.Group(System.String)">
+            <summary>
+            Gets the name of the channel for sending a message to a named group of connections.
+            </summary>
+            <param name="groupName">The name of the group to get the channel for.</param>
+        </member>
+        <member name="M:Microsoft.AspNetCore.SignalR.StackExchangeRedis.Internal.RedisChannels.User(System.String)">
+            <summary>
+            Gets the name of the channel for sending a message to all collections associated with a user.
+            </summary>
+            <param name="userId">The ID of the user to get the channel for.</param>
+        </member>
+        <member name="M:Microsoft.AspNetCore.SignalR.StackExchangeRedis.Internal.RedisChannels.Ack(System.String)">
+            <summary>
+            Gets the name of the acknowledgement channel for the specified server.
+            </summary>
+            <param name="serverName">The name of the server to get the acknowledgement channel for.</param>
+            <returns></returns>
+        </member>
+        <member name="P:Microsoft.AspNetCore.SignalR.StackExchangeRedis.Internal.RedisGroupCommand.Id">
+            <summary>
+            Gets the ID of the group command.
+            </summary>
+        </member>
+        <member name="P:Microsoft.AspNetCore.SignalR.StackExchangeRedis.Internal.RedisGroupCommand.ServerName">
+            <summary>
+            Gets the name of the server that sent the command.
+            </summary>
+        </member>
+        <member name="P:Microsoft.AspNetCore.SignalR.StackExchangeRedis.Internal.RedisGroupCommand.Action">
+            <summary>
+            Gets the action to be performed on the group.
+            </summary>
+        </member>
+        <member name="P:Microsoft.AspNetCore.SignalR.StackExchangeRedis.Internal.RedisGroupCommand.GroupName">
+            <summary>
+            Gets the group on which the action is performed.
+            </summary>
+        </member>
+        <member name="P:Microsoft.AspNetCore.SignalR.StackExchangeRedis.Internal.RedisGroupCommand.ConnectionId">
+            <summary>
+            Gets the ID of the connection to be added or removed from the group.
+            </summary>
+        </member>
+        <member name="P:Microsoft.AspNetCore.SignalR.StackExchangeRedis.Internal.RedisInvocation.ExcludedConnectionIds">
+            <summary>
+            Gets a list of connections that should be excluded from this invocation.
+            May be null to indicate that no connections are to be excluded.
+            </summary>
+        </member>
+        <member name="P:Microsoft.AspNetCore.SignalR.StackExchangeRedis.Internal.RedisInvocation.Message">
+            <summary>
+            Gets the message serialization cache containing serialized payloads for the message.
+            </summary>
+        </member>
+        <member name="T:Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisHubLifetimeManager`1">
+            <summary>
+            The Redis scaleout provider for multi-server support.
+            </summary>
+            <typeparam name="THub">The type of <see cref="T:Microsoft.AspNetCore.SignalR.Hub"/> to manage connections for.</typeparam>
+        </member>
+        <member name="M:Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisHubLifetimeManager`1.#ctor(Microsoft.Extensions.Logging.ILogger{Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisHubLifetimeManager{`0}},Microsoft.Extensions.Options.IOptions{Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisOptions},Microsoft.AspNetCore.SignalR.IHubProtocolResolver)">
+            <summary>
+            Constructs the <see cref="T:Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisHubLifetimeManager`1"/> with types from Dependency Injection.
+            </summary>
+            <param name="logger">The logger to write information about what the class is doing.</param>
+            <param name="options">The <see cref="T:Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisOptions"/> that influence behavior of the Redis connection.</param>
+            <param name="hubProtocolResolver">The <see cref="T:Microsoft.AspNetCore.SignalR.IHubProtocolResolver"/> to get an <see cref="T:Microsoft.AspNetCore.SignalR.Protocol.IHubProtocol"/> instance when writing to connections.</param>
+        </member>
+        <member name="M:Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisHubLifetimeManager`1.#ctor(Microsoft.Extensions.Logging.ILogger{Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisHubLifetimeManager{`0}},Microsoft.Extensions.Options.IOptions{Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisOptions},Microsoft.AspNetCore.SignalR.IHubProtocolResolver,Microsoft.Extensions.Options.IOptions{Microsoft.AspNetCore.SignalR.HubOptions},Microsoft.Extensions.Options.IOptions{Microsoft.AspNetCore.SignalR.HubOptions{`0}})">
+            <summary>
+            Constructs the <see cref="T:Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisHubLifetimeManager`1"/> with types from Dependency Injection.
+            </summary>
+            <param name="logger">The logger to write information about what the class is doing.</param>
+            <param name="options">The <see cref="T:Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisOptions"/> that influence behavior of the Redis connection.</param>
+            <param name="hubProtocolResolver">The <see cref="T:Microsoft.AspNetCore.SignalR.IHubProtocolResolver"/> to get an <see cref="T:Microsoft.AspNetCore.SignalR.Protocol.IHubProtocol"/> instance when writing to connections.</param>
+            <param name="globalHubOptions">The global <see cref="T:Microsoft.AspNetCore.SignalR.HubOptions"/>.</param>
+            <param name="hubOptions">The <typeparamref name="THub"/> specific options.</param>
+        </member>
+        <member name="M:Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisHubLifetimeManager`1.OnConnectedAsync(Microsoft.AspNetCore.SignalR.HubConnectionContext)">
+            <inheritdoc />
+        </member>
+        <member name="M:Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisHubLifetimeManager`1.OnDisconnectedAsync(Microsoft.AspNetCore.SignalR.HubConnectionContext)">
+            <inheritdoc />
+        </member>
+        <member name="M:Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisHubLifetimeManager`1.SendAllAsync(System.String,System.Object[],System.Threading.CancellationToken)">
+            <inheritdoc />
+        </member>
+        <member name="M:Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisHubLifetimeManager`1.SendAllExceptAsync(System.String,System.Object[],System.Collections.Generic.IReadOnlyList{System.String},System.Threading.CancellationToken)">
+            <inheritdoc />
+        </member>
+        <member name="M:Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisHubLifetimeManager`1.SendConnectionAsync(System.String,System.String,System.Object[],System.Threading.CancellationToken)">
+            <inheritdoc />
+        </member>
+        <member name="M:Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisHubLifetimeManager`1.SendGroupAsync(System.String,System.String,System.Object[],System.Threading.CancellationToken)">
+            <inheritdoc />
+        </member>
+        <member name="M:Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisHubLifetimeManager`1.SendGroupExceptAsync(System.String,System.String,System.Object[],System.Collections.Generic.IReadOnlyList{System.String},System.Threading.CancellationToken)">
+            <inheritdoc />
+        </member>
+        <member name="M:Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisHubLifetimeManager`1.SendUserAsync(System.String,System.String,System.Object[],System.Threading.CancellationToken)">
+            <inheritdoc />
+        </member>
+        <member name="M:Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisHubLifetimeManager`1.AddToGroupAsync(System.String,System.String,System.Threading.CancellationToken)">
+            <inheritdoc />
+        </member>
+        <member name="M:Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisHubLifetimeManager`1.RemoveFromGroupAsync(System.String,System.String,System.Threading.CancellationToken)">
+            <inheritdoc />
+        </member>
+        <member name="M:Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisHubLifetimeManager`1.SendConnectionsAsync(System.Collections.Generic.IReadOnlyList{System.String},System.String,System.Object[],System.Threading.CancellationToken)">
+            <inheritdoc />
+        </member>
+        <member name="M:Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisHubLifetimeManager`1.SendGroupsAsync(System.Collections.Generic.IReadOnlyList{System.String},System.String,System.Object[],System.Threading.CancellationToken)">
+            <inheritdoc />
+        </member>
+        <member name="M:Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisHubLifetimeManager`1.SendUsersAsync(System.Collections.Generic.IReadOnlyList{System.String},System.String,System.Object[],System.Threading.CancellationToken)">
+            <inheritdoc />
+        </member>
+        <member name="M:Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisHubLifetimeManager`1.RemoveGroupAsyncCore(Microsoft.AspNetCore.SignalR.HubConnectionContext,System.String)">
+            <summary>
+            This takes <see cref="T:Microsoft.AspNetCore.SignalR.HubConnectionContext"/> because we want to remove the connection from the
+            _connections list in OnDisconnectedAsync and still be able to remove groups with this method.
+            </summary>
+        </member>
+        <member name="M:Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisHubLifetimeManager`1.Dispose">
+            <summary>
+            Cleans up the Redis connection.
+            </summary>
+        </member>
+        <member name="M:Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisHubLifetimeManager`1.InvokeConnectionAsync``1(System.String,System.String,System.Object[],System.Threading.CancellationToken)">
+            <inheritdoc/>
+        </member>
+        <member name="M:Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisHubLifetimeManager`1.SetConnectionResultAsync(System.String,Microsoft.AspNetCore.SignalR.Protocol.CompletionMessage)">
+            <inheritdoc/>
+        </member>
+        <member name="M:Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisHubLifetimeManager`1.TryGetReturnType(System.String,System.Type@)">
+            <inheritdoc/>
+        </member>
+        <member name="T:Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisOptions">
+            <summary>
+            Options used to configure <see cref="T:Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisHubLifetimeManager`1"/>.
+            </summary>
+        </member>
+        <member name="P:Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisOptions.Configuration">
+            <summary>
+            Gets or sets configuration options exposed by <c>StackExchange.Redis</c>.
+            </summary>
+        </member>
+        <member name="P:Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisOptions.ConnectionFactory">
+            <summary>
+            Gets or sets the Redis connection factory.
+            </summary>
+        </member>
+        <member name="T:Microsoft.AspNetCore.Internal.MemoryBufferWriter.WrittenBuffers">
+            <summary>
+            Holds the written segments from a MemoryBufferWriter and is no longer attached to a MemoryBufferWriter.
+            You are now responsible for calling Dispose on this type to return the memory to the pool.
+            </summary>
+        </member>
+        <member name="T:Microsoft.AspNetCore.Internal.MemoryBufferWriter.CompletedBuffer">
+            <summary>
+            Holds a byte[] from the pool and a size value. Basically a Memory but guaranteed to be backed by an ArrayPool byte[], so that we know we can return it.
+            </summary>
+        </member>
+        <member name="M:Microsoft.AspNetCore.Shared.ArgumentNullThrowHelper.ThrowIfNull(System.Object,System.String)">
+            <summary>Throws an <see cref="T:System.ArgumentNullException"/> if <paramref name="argument"/> is null.</summary>
+            <param name="argument">The reference type argument to validate as non-null.</param>
+            <param name="paramName">The name of the parameter with which <paramref name="argument"/> corresponds.</param>
+        </member>
+        <member name="M:Microsoft.AspNetCore.Shared.ArgumentNullThrowHelper.ThrowIfNullOrEmpty(System.String,System.String)">
+            <summary>Throws an <see cref="T:System.ArgumentException"/> if <paramref name="argument"/> is null or empty.</summary>
+            <param name="argument">The <see cref="T:System.String"/> argument to validate as non-null and non-empty.</param>
+            <param name="paramName">The name of the parameter with which <paramref name="argument"/> corresponds.</param>
+        </member>
+        <member name="T:Microsoft.Extensions.DependencyInjection.StackExchangeRedisDependencyInjectionExtensions">
+            <summary>
+            Extension methods for configuring Redis-based scale-out for a SignalR Server in an <see cref="T:Microsoft.AspNetCore.SignalR.ISignalRServerBuilder" />.
+            </summary>
+        </member>
+        <member name="M:Microsoft.Extensions.DependencyInjection.StackExchangeRedisDependencyInjectionExtensions.AddStackExchangeRedis(Microsoft.AspNetCore.SignalR.ISignalRServerBuilder)">
+            <summary>
+            Adds scale-out to a <see cref="T:Microsoft.AspNetCore.SignalR.ISignalRServerBuilder"/>, using a shared Redis server.
+            </summary>
+            <param name="signalrBuilder">The <see cref="T:Microsoft.AspNetCore.SignalR.ISignalRServerBuilder"/>.</param>
+            <returns>The same instance of the <see cref="T:Microsoft.AspNetCore.SignalR.ISignalRServerBuilder"/> for chaining.</returns>
+        </member>
+        <member name="M:Microsoft.Extensions.DependencyInjection.StackExchangeRedisDependencyInjectionExtensions.AddStackExchangeRedis(Microsoft.AspNetCore.SignalR.ISignalRServerBuilder,System.String)">
+            <summary>
+            Adds scale-out to a <see cref="T:Microsoft.AspNetCore.SignalR.ISignalRServerBuilder"/>, using a shared Redis server.
+            </summary>
+            <param name="signalrBuilder">The <see cref="T:Microsoft.AspNetCore.SignalR.ISignalRServerBuilder"/>.</param>
+            <param name="redisConnectionString">The connection string used to connect to the Redis server.</param>
+            <returns>The same instance of the <see cref="T:Microsoft.AspNetCore.SignalR.ISignalRServerBuilder"/> for chaining.</returns>
+        </member>
+        <member name="M:Microsoft.Extensions.DependencyInjection.StackExchangeRedisDependencyInjectionExtensions.AddStackExchangeRedis(Microsoft.AspNetCore.SignalR.ISignalRServerBuilder,System.Action{Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisOptions})">
+            <summary>
+            Adds scale-out to a <see cref="T:Microsoft.AspNetCore.SignalR.ISignalRServerBuilder"/>, using a shared Redis server.
+            </summary>
+            <param name="signalrBuilder">The <see cref="T:Microsoft.AspNetCore.SignalR.ISignalRServerBuilder"/>.</param>
+            <param name="configure">A callback to configure the Redis options.</param>
+            <returns>The same instance of the <see cref="T:Microsoft.AspNetCore.SignalR.ISignalRServerBuilder"/> for chaining.</returns>
+        </member>
+        <member name="M:Microsoft.Extensions.DependencyInjection.StackExchangeRedisDependencyInjectionExtensions.AddStackExchangeRedis(Microsoft.AspNetCore.SignalR.ISignalRServerBuilder,System.String,System.Action{Microsoft.AspNetCore.SignalR.StackExchangeRedis.RedisOptions})">
+            <summary>
+            Adds scale-out to a <see cref="T:Microsoft.AspNetCore.SignalR.ISignalRServerBuilder"/>, using a shared Redis server.
+            </summary>
+            <param name="signalrBuilder">The <see cref="T:Microsoft.AspNetCore.SignalR.ISignalRServerBuilder"/>.</param>
+            <param name="redisConnectionString">The connection string used to connect to the Redis server.</param>
+            <param name="configure">A callback to configure the Redis options.</param>
+            <returns>The same instance of the <see cref="T:Microsoft.AspNetCore.SignalR.ISignalRServerBuilder"/> for chaining.</returns>
+        </member>
+    </members>
+</doc>

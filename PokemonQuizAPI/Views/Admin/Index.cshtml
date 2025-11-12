@@ -1,0 +1,194 @@
+@model PokemonQuizAPI.Models.AdminViewModel
+@{
+    Layout = null;
+}
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Admin Dashboard</title>
+    <style>
+        body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0;background:#f3f4f6}
+        .container{max-width:1100px;margin:24px auto;padding:18px}
+        .grid{display:flex;gap:18px}
+        .col{flex:1}
+        .card{background:#fff;padding:12px;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,0.06)}
+        table{width:100%;border-collapse:collapse}
+        th,td{padding:8px;border-bottom:1px solid #eee}
+        th{background:#fafafa;text-align:left}
+        h1{margin:0 0 12px}
+        .muted{color:#666}
+        .btn{background:#123e7a;color:#fff;padding:6px 10px;border-radius:6px;border:none;cursor:pointer}
+        .btn.ghost{background:#ef4444}
+        /* modal */
+        .modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,0.5)}
+        .modal.open{display:flex}
+        .modal .panel{background:#fff;padding:18px;border-radius:8px;max-width:420px;width:90%;box-shadow:0 6px 20px rgba(0,0,0,0.2)}
+        .modal .actions{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Admin Dashboard</h1>
+        <div class="grid" style="margin-bottom:12px">
+            <div class="col card">
+                <h3>Active Rooms</h3>
+                @if (Model.Rooms == null || Model.Rooms.Count == 0)
+                {
+                    <div class="muted">No active rooms</div>
+                }
+                else
+                {
+                    <table>
+                        <thead>
+                            <tr><th>Room</th><th>Players</th><th>Selected Game</th><th>Created</th></tr>
+                        </thead>
+                        <tbody>
+                        @foreach(var r in Model.Rooms)
+                        {
+                            // r is a dynamic anonymous object from GameHub snapshot
+                            var rc = r.GetType().GetProperty("roomCode")?.GetValue(r)?.ToString() ?? "";
+                            var players = r.GetType().GetProperty("players")?.GetValue(r) as System.Collections.IEnumerable;
+                            var playerCount = 0;
+                            if(players!=null){ foreach(var _ in players) playerCount++; }
+                            var game = r.GetType().GetProperty("selectedGameId")?.GetValue(r)?.ToString() ?? "";
+                            var created = r.GetType().GetProperty("createdAt")?.GetValue(r)?.ToString() ?? "";
+                            <tr>
+                                <td>@rc</td>
+                                <td>@playerCount</td>
+                                <td>@game</td>
+                                <td>@created</td>
+                            </tr>
+                        }
+                        </tbody>
+                    </table>
+                }
+            </div>
+
+            <div class="col card">
+                <h3>Overview</h3>
+                <p>Total games played: <strong>@Model.TotalGames</strong></p>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>Users</h3>
+            @if (Model.Users==null || Model.Users.Count==0)
+            {
+                <div class="muted">No users</div>
+            }
+            else
+            {
+                <table id="usersTable">
+                    <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Games Played</th><th>Actions</th></tr></thead>
+                    <tbody>
+                    @foreach(var u in Model.Users)
+                    {
+                        var id = u.GetType().GetProperty("id")?.GetValue(u)?.ToString() ?? "";
+                        var uname = u.GetType().GetProperty("username")?.GetValue(u)?.ToString() ?? "";
+                        var email = u.GetType().GetProperty("email")?.GetValue(u)?.ToString() ?? "";
+                        var role = u.GetType().GetProperty("role")?.GetValue(u)?.ToString() ?? "";
+                        var games = u.GetType().GetProperty("gamesPlayed")?.GetValue(u)?.ToString() ?? "0";
+                        var displayRole = string.IsNullOrWhiteSpace(role) ? "User" : role;
+                        <tr data-userid="@id">
+                            <td>@uname</td>
+                            <td>@email</td>
+                            <td class="roleCell">@displayRole</td>
+                            <td class="gamesCell">@games</td>
+                            <td>
+                                @if (string.Equals(role, "admin", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    <button class="btn" onclick="openChangeRoleModal('@id','user', this)">Revoke Admin</button>
+                                }
+                                else
+                                {
+                                    <button class="btn" onclick="openChangeRoleModal('@id','admin', this)">Make Admin</button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            }
+        </div>
+    </div>
+
+    <div id="confirmModal" class="modal" role="dialog" aria-hidden="true">
+        <div class="panel">
+            <div id="confirmMessage">Are you sure?</div>
+            <div class="actions">
+                <button id="confirmCancel" class="btn" onclick="closeModal()">Cancel</button>
+                <button id="confirmOk" class="btn">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let pendingChange = null; // { userId, newRole, button }
+
+        function openChangeRoleModal(userId, newRole, btn){
+            pendingChange = { userId, newRole, btn };
+            const msg = `Change role for user to '${newRole}'?`;
+            document.getElementById('confirmMessage').innerText = msg;
+            const modal = document.getElementById('confirmModal');
+            modal.classList.add('open');
+            modal.setAttribute('aria-hidden','false');
+
+            const ok = document.getElementById('confirmOk');
+            ok.onclick = () => performRoleChange();
+        }
+
+        function closeModal(){
+            const modal = document.getElementById('confirmModal');
+            modal.classList.remove('open');
+            modal.setAttribute('aria-hidden','true');
+            pendingChange = null;
+        }
+
+        async function performRoleChange(){
+            if(!pendingChange) return closeModal();
+            const { userId, newRole, btn } = pendingChange;
+            if(!userId) return alert('Missing user id');
+            try{
+                btn.disabled = true;
+                const token = localStorage.getItem('admin_token') || '';
+                const res = await fetch('/api/admin/users/' + encodeURIComponent(userId) + '/role', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': token ? ('Bearer ' + token) : '' },
+                    body: JSON.stringify({ role: newRole })
+                });
+                if(!res.ok){
+                    const txt = await res.text();
+                    alert('Failed: ' + txt);
+                    btn.disabled = false;
+                    closeModal();
+                    return;
+                }
+
+                // Update UI: replace button and role text
+                const row = btn.closest('tr');
+                if(row){
+                    row.querySelector('.roleCell').innerText = newRole;
+                    row.querySelector('.gamesCell').innerText = row.querySelector('.gamesCell').innerText || '0';
+                    const actionsCell = btn.parentElement;
+                    if(actionsCell){
+                        if(newRole === 'admin'){
+                            actionsCell.innerHTML = `<button class=\"btn\" onclick=\"openChangeRoleModal('${id}','user', this)\">Revoke Admin</button>`;
+                        } else {
+                            actionsCell.innerHTML = `<button class=\"btn\" onclick=\"openChangeRoleModal('${id}','admin', this)\">Make Admin</button>`;
+                        }
+                    }
+                }
+
+                alert('Role updated');
+            }catch(e){
+                console.warn(e); alert('Failed to change role');
+            }finally{
+                try{ btn.disabled = false; } catch(e){}
+                closeModal();
+            }
+        }
+    </script>
+</body>
+</html>

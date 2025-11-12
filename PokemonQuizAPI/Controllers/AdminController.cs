@@ -1,109 +1,74 @@
 using Microsoft.AspNetCore.Mvc;
-using PokemonQuizAPI.Hubs;
 using PokemonQuizAPI.Data;
-using System.Reflection;
+using System.Threading.Tasks;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace PokemonQuizAPI.Controllers
 {
-    [ApiController]
-    [Route("api/admin")]
-    public class AdminController : ControllerBase
+    // Minimal controller to render an admin Razor page which can fetch admin APIs client-side
+    [Route("admin")]
+    public class AdminController : Controller
     {
         private readonly DatabaseHelper _db;
-        private readonly ILogger<AdminController> _logger;
+        private readonly IWebHostEnvironment _env;
 
-        public AdminController(DatabaseHelper db, ILogger<AdminController> logger)
+        public AdminController(DatabaseHelper db, IWebHostEnvironment env)
         {
             _db = db;
-            _logger = logger;
+            _env = env;
         }
 
-        [HttpGet("dashboard")]
-        public async Task<IActionResult> Dashboard()
+        [HttpGet("")]
+        public async Task<IActionResult> Index()
         {
-            // Minimal metrics: active rooms, active players, total games played (from DB)
-            var rooms = GameHub.GetRoomsSnapshot();
-            var activeRooms = rooms.Count;
+            // Gather basic admin data for server-rendered view: active rooms, total games, users
+            var rooms = Hubs.GameHub.GetRoomsSnapshot();
+            var totalGames = await _db.GetTotalGamesPlayedAsync();
 
-            // Collect distinct connection ids from rooms in a null-safe way
-            var connectionIds = new HashSet<string>();
-            foreach (var roomObj in rooms)
+            var usersDebug = await _db.GetAllUsersDebugAsync();
+
+            // Get aggregated games played counts per user and merge into view model
+            var gamesCounts = await _db.GetGamesPlayedCountsAsync();
+
+            var usersWithRoles = new List<object>();
+            foreach (var u in usersDebug)
             {
-                if (roomObj == null) continue;
-                var t = roomObj.GetType();
-                var playersProp = t.GetProperty("players") ?? t.GetProperty("Players");
-                if (playersProp == null) continue;
-                var playersVal = playersProp.GetValue(roomObj) as System.Collections.IEnumerable;
-                if (playersVal == null) continue;
-
-                foreach (var p in playersVal)
+                try
                 {
-                    if (p == null) continue;
-                    var pt = p.GetType();
-                    var connProp = pt.GetProperty("ConnectionId") ?? pt.GetProperty("connectionId") ?? pt.GetProperty("ConnectionID");
-                    if (connProp == null) continue;
-                    var connVal = connProp.GetValue(p)?.ToString();
-                    if (!string.IsNullOrWhiteSpace(connVal)) connectionIds.Add(connVal);
+                    // u is an anonymous object with id, username, email, hasPassword
+                    var idProp = u.GetType().GetProperty("id");
+                    var id = idProp?.GetValue(u)?.ToString();
+                    int gamesPlayed = 0;
+                    if (!string.IsNullOrWhiteSpace(id) && gamesCounts != null && gamesCounts.TryGetValue(id, out var gp)) gamesPlayed = gp;
+
+                    if (!string.IsNullOrWhiteSpace(id))
+                    {
+                        var info = await _db.GetUserInfoByIdAsync(id);
+                        usersWithRoles.Add(new { id = info.Id ?? id, username = info.Username ?? (u.GetType().GetProperty("username")?.GetValue(u)?.ToString() ?? ""), email = info.Email ?? (u.GetType().GetProperty("email")?.GetValue(u)?.ToString() ?? ""), role = info.Role ?? string.Empty, gamesPlayed });
+                    }
+                    else
+                    {
+                        usersWithRoles.Add(new { id = "", username = u.GetType().GetProperty("username")?.GetValue(u)?.ToString() ?? "", email = u.GetType().GetProperty("email")?.GetValue(u)?.ToString() ?? "", role = string.Empty, gamesPlayed });
+                    }
+                }
+                catch
+                {
+                    usersWithRoles.Add(new { id = "", username = "", email = "", role = string.Empty, gamesPlayed = 0 });
                 }
             }
 
-            var activePlayers = connectionIds.Count;
-
-            // Get per-game stats from DB helper
-            var stats = await _db.GetGameStatsAsync();
-            var totalGamesPlayed = stats.Sum(s => s.GamesPlayed);
-
-            return Ok(new {
-                activeRooms,
-                activePlayers,
-                totalGamesPlayed,
-                rooms,
-                gameStats = stats
-            });
-        }
-
-        [HttpGet("rooms")]
-        public IActionResult GetRooms()
-        {
-            return Ok(GameHub.GetRoomsSnapshot());
-        }
-
-        [HttpGet("stats/games")]
-        public async Task<IActionResult> GetGameStats()
-        {
-            var stats = await _db.GetGameStatsAsync();
-            return Ok(stats);
-        }
-
-        [HttpPost("rooms/{code}/end")]
-        public IActionResult EndRoom(string code)
-        {
-            if (GameHub.TryRemoveRoom(code))
+            var model = new Models.AdminViewModel
             {
-                _logger.LogInformation("Admin removed room {RoomCode}", code);
-                return Ok(new { success = true });
-            }
-            return NotFound(new { success = false, message = "Room not found" });
+                TotalGames = totalGames,
+                Rooms = rooms,
+                Users = usersWithRoles
+            };
+
+            return View("Index", model);
         }
 
-        [HttpGet("stats/users")] // later: implement user stats
-        public IActionResult UserStats()
-        {
-            // Placeholder
-            return Ok(new { users = new string[] { } });
-        }
-
-        [HttpGet("debug/users")]
-        public async Task<IActionResult> GetAllUsersDebug()
-        {
-            // Require admin auth: middleware sets HttpContext.Items["UserId"] when admin token provided
-            if (!HttpContext.Items.TryGetValue("UserId", out var userIdObj) || userIdObj == null)
-            {
-                return Unauthorized();
-            }
-
-            var list = await _db.GetAllUsersDebugAsync();
-            return Ok(list);
-        }
+        [HttpGet("/{**slug}")]
+        public IActionResult Spa() => RedirectToAction(nameof(Index));
     }
 }

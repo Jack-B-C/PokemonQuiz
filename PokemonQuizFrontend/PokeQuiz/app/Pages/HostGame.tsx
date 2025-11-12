@@ -1,8 +1,8 @@
-﻿import React, { useState, useRef, useEffect } from "react";
+﻿import * as React from "react";
 import { View, Text, StyleSheet, TextInput, Alert, Platform, Button } from "react-native";
-import Navbar from "@/components/Navbar";
-import AppButton from "@/components/AppButton";
-import { useRouter, useLocalSearchParams } from "expo-router";
+import Navbar from '../../components/Navbar';
+import AppButton from '../../components/AppButton';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import * as SignalR from "@microsoft/signalr";
 import { ensureConnection, getConnection } from '../../utils/signalrClient';
 
@@ -12,13 +12,27 @@ export default function HostGame() {
     const paramRoomCode = params.roomCode as string | undefined;
     const paramPlayerName = params.playerName as string | undefined;
 
-    const [hostName, setHostName] = useState(paramPlayerName ?? "");
-    const [roomCode, setRoomCode] = useState(paramRoomCode ?? "");
-    const [players, setPlayers] = useState<{ name: string; isHost: boolean }[]>([]);
-    const [isConnected, setIsConnected] = useState(false);
-    const [selectedGame, setSelectedGame] = useState<string | null>(null);
-    const connectionRef = useRef<SignalR.HubConnection | null>(null);
-    const autoStartRef = useRef(false);
+    const [hostName, setHostName] = React.useState(paramPlayerName ?? "");
+    const [roomCode, setRoomCode] = React.useState(paramRoomCode ?? "");
+    const [players, setPlayers] = React.useState<{ name: string; isHost: boolean }[]>([]);
+    const [isConnected, setIsConnected] = React.useState(false);
+    const [selectedGame, setSelectedGame] = React.useState<string | null>(null);
+    const connectionRef = React.useRef<SignalR.HubConnection | null>(null);
+    const autoStartRef = React.useRef(false);
+
+    // ensure back goes to choose game and cleanup connection
+    const handleBack = async () => {
+        try {
+            const conn = connectionRef.current ?? getConnection();
+            if (conn) {
+                try { if (roomCode) await conn.invoke('LeaveRoom', roomCode); } catch { /* ignore */ }
+                try { await conn.stop(); } catch { /* ignore */ }
+            }
+        } catch (e) {
+            console.warn('Error during back cleanup', e);
+        }
+        try { router.replace({ pathname: '/pages/ChooseGame' } as any); } catch { router.push('/pages/ChooseGame' as any); }
+    };
 
     const initConnectionAndRehydrate = async (hubUrl: string, rc?: string, name?: string) => {
         try {
@@ -81,18 +95,60 @@ export default function HostGame() {
             // When server starts the game, host should navigate to the game page
             connection.on("GameStarted", (gameId: string) => {
                 console.log('GameStarted (host) received', gameId);
-                // Navigate to multiplayer game page for guess-stats
-                if (gameId === 'guess-stats') {
-                    router.replace({ pathname: '/pages/MultiplayerGuessStat', params: { roomCode: rc ?? roomCode, playerName: hostName, isHost: 'true' } } as any);
-                } else {
-                    // default to multiplayer page for now
-                    router.replace({ pathname: '/pages/MultiplayerGuessStat', params: { roomCode: rc ?? roomCode, playerName: hostName, isHost: 'true' } } as any);
-                }
+
+                const navigateWhenReady = async () => {
+                    const conn = connectionRef.current ?? connection;
+                    const roomParam = rc ?? roomCode; // don't shadow outer variable
+                    const maxAttempts = 5;
+                    let attempt = 0;
+                    let info: any = null;
+                    try {
+                        while (attempt < maxAttempts) {
+                            attempt++;
+                            try {
+                                info = await conn.invoke('GetRoomInfo', roomParam);
+                                console.debug('Host GameStarted rehydrate attempt', attempt, 'info=', info);
+                                if (info && info.currentQuestion) {
+                                    // we have question available — navigate now
+                                    break;
+                                }
+                            } catch (e) {
+                                console.warn('Host rehydrate GetRoomInfo failed on attempt', attempt, e);
+                            }
+                            // small backoff
+                            await new Promise(res => setTimeout(res, 200));
+                        }
+                    } catch { }
+
+                    // Prepare navigation params, include initialQuestion if present
+                    let navParams: any = { roomCode: roomParam, playerName: name ?? hostName, isHost: 'true' };
+                    try {
+                        if (!info) info = await conn.invoke('GetRoomInfo', roomParam);
+                        if (info && info.currentQuestion) {
+                            navParams.initialQuestion = JSON.stringify(info.currentQuestion);
+                            if (info.questionStartedAt) navParams.questionStartedAt = info.questionStartedAt;
+                        }
+                    } catch (e) { console.warn('Final GetRoomInfo before navigate failed', e); }
+
+                    // Navigate after attempts even if no question found (avoid blocking indefinitely)
+                    if (gameId === 'guess-stats') {
+                        router.replace({ pathname: '/pages/MultiplayerGuessStat', params: navParams } as any);
+                    } else if (gameId === 'higher-or-lower' || gameId === 'compare-stat') {
+                        router.replace({ pathname: '/pages/MultiplayerHigherOrLower', params: navParams } as any);
+                    } else {
+                        router.replace({ pathname: '/pages/MultiplayerGuessStat', params: navParams } as any);
+                    }
+                };
+
+                // fire-and-forget
+                void navigateWhenReady();
             });
             connection.on("gamestarted", (gameId: string) => {
                 console.log('gamestarted (host) received', gameId);
                 if (gameId === 'guess-stats') {
                     router.replace({ pathname: '/pages/MultiplayerGuessStat', params: { roomCode: rc ?? roomCode, playerName: hostName, isHost: 'true' } } as any);
+                } else if (gameId === 'higher-or-lower' || gameId === 'compare-stat') {
+                    router.replace({ pathname: '/pages/MultiplayerHigherOrLower', params: { roomCode: rc ?? roomCode, playerName: hostName, isHost: 'true' } } as any);
                 } else {
                     router.replace({ pathname: '/pages/MultiplayerGuessStat', params: { roomCode: rc ?? roomCode, playerName: hostName, isHost: 'true' } } as any);
                 }
@@ -153,7 +209,7 @@ export default function HostGame() {
         }
     };
 
-    useEffect(() => {
+    React.useEffect(() => {
         // If navigated back with params (after selecting game), rehydrate
         if (paramRoomCode || paramPlayerName) {
             const serverIp = Platform.OS === "android" ? "10.0.2.2" : "localhost";
@@ -191,7 +247,7 @@ export default function HostGame() {
 
     return (
         <View style={styles.container}>
-            <Navbar title="Host Game" />
+            <Navbar title="Host Game" onBack={handleBack} />
             <View style={styles.content}>
                 {!isConnected ? (
                     <>

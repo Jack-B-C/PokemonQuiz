@@ -3,6 +3,8 @@ using System.Collections.Concurrent;
 using PokemonQuizAPI.Data;
 using Newtonsoft.Json.Linq;
 using System.Threading;
+using System.Text.Json;
+using PokemonQuizAPI.Models;
 
 namespace PokemonQuizAPI.Hubs
 {
@@ -12,13 +14,16 @@ namespace PokemonQuizAPI.Hubs
         private static readonly ConcurrentDictionary<string, CancellationTokenSource> ShutdownTokens = new();
         private readonly ILogger<GameHub> _logger;
         private readonly DatabaseHelper _db;
+        private readonly IGameRoomRepository _gameRoomRepo;
         private const int MaxNameLength = 24;
         private const int QuestionTimeoutMs = 20000; // 20s used for scoring
+        private const int MAX_QUESTIONS_PER_GAME = 10;
 
-        public GameHub(ILogger<GameHub> logger, DatabaseHelper db)
+        public GameHub(ILogger<GameHub> logger, DatabaseHelper db, IGameRoomRepository gameRoomRepo)
         {
             _logger = logger;
             _db = db;
+            _gameRoomRepo = gameRoomRepo;
         }
 
         public class Player
@@ -47,6 +52,12 @@ namespace PokemonQuizAPI.Hubs
 
             // Current persistent game session id (DB or file-backed)
             public string? CurrentSessionId { get; set; }
+
+            // Number of questions sent in this session
+            public int QuestionsSent { get; set; } = 0;
+
+            // Sync object for thread-safety
+            public object SyncRoot { get; } = new();
         }
 
         // Helper: normalize an incoming question JObject to a consistent outgoing shape
@@ -178,11 +189,42 @@ namespace PokemonQuizAPI.Hubs
                     return;
                 }
 
-                string roomCode;
-                do
+                // Try to generate a unique room code and persist it in the DB.
+                const int maxAttempts = 6;
+                string roomCode = string.Empty;
+                var inserted = false;
+
+                for (int attempt = 0; attempt < maxAttempts; attempt++)
                 {
-                    roomCode = GenerateRoomCode();
-                } while (Rooms.ContainsKey(roomCode));
+                    var candidate = GenerateRoomCode();
+
+                    // Avoid obvious in-memory collision
+                    if (Rooms.ContainsKey(candidate)) continue;
+
+                    try
+                    {
+                        // Attempt to insert; InsertGameRoomAsync returns false on duplicate key
+                        if (await _gameRoomRepo.InsertGameRoomAsync(candidate, null, null, Context.ConnectionAborted))
+                        {
+                            roomCode = candidate;
+                            inserted = true;
+                            break;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Insert attempt failed for room candidate {Candidate}", candidate);
+                    }
+
+                    // small backoff before retrying
+                    try { await Task.Delay(50, Context.ConnectionAborted); } catch { }
+                }
+
+                if (!inserted)
+                {
+                    await Clients.Caller.SendAsync("Error", "Failed to create room after multiple attempts. Try again.");
+                    return;
+                }
 
                 var hostPlayer = new Player
                 {
@@ -199,18 +241,6 @@ namespace PokemonQuizAPI.Hubs
                     GameStarted = false,
                     SelectedGameId = null
                 };
-
-                // Persist room to database
-                try
-                {
-                    await _db.InsertGameRoomAsync(roomCode);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Failed to persist room {RoomCode} to database", roomCode);
-                    await Clients.Caller.SendAsync("Error", "Failed to create room on server.");
-                    return;
-                }
 
                 Rooms[roomCode] = roomData;
                 await Groups.AddToGroupAsync(Context.ConnectionId, roomCode);
@@ -270,7 +300,7 @@ namespace PokemonQuizAPI.Hubs
                 // Persist selection to DB if available
                 try
                 {
-                    await _db.UpdateGameRoomGameIdAsync(roomCode, gameId);
+                    await _gameRoomRepo.UpdateGameRoomGameIdAsync(roomCode, gameId, Context.ConnectionAborted);
                 }
                 catch (Exception ex)
                 {
@@ -319,7 +349,7 @@ namespace PokemonQuizAPI.Hubs
                     try
                     {
                         // Check DB for room presence regardless of is_active
-                        var existsAny = await _db.GameRoomExistsAnyStatusAsync(roomCode);
+                        var existsAny = await _gameRoomRepo.GameRoomExistsAnyStatusAsync(roomCode, Context.ConnectionAborted);
                         if (existsAny)
                         {
                             roomData = new RoomData
@@ -333,7 +363,7 @@ namespace PokemonQuizAPI.Hubs
                             // Populate selected game from DB if set
                             try
                             {
-                                var gameId = await _db.GetGameIdForRoomAsync(roomCode);
+                                var gameId = await _gameRoomRepo.GetGameIdForRoomAsync(roomCode, Context.ConnectionAborted);
                                 if (!string.IsNullOrWhiteSpace(gameId))
                                 {
                                     roomData.SelectedGameId = gameId;
@@ -376,21 +406,25 @@ namespace PokemonQuizAPI.Hubs
                     // we won't send the "Game already started" error here to allow reconnects
                 }
 
-                if (roomData.Players.Any(p => p.Name.Equals(playerName, StringComparison.OrdinalIgnoreCase)))
+                lock (roomData.SyncRoot)
                 {
-                    await Clients.Caller.SendAsync("Error", "Name already taken in this room.");
-                    return;
+                    if (roomData.Players.Any(p => p.Name.Equals(playerName, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        Clients.Caller.SendAsync("Error", "Name already taken in this room.");
+                        return;
+                    }
+
+                    var newPlayer = new Player
+                    {
+                        Name = playerName,
+                        IsHost = false,
+                        ConnectionId = Context.ConnectionId,
+                        Score = 0
+                    };
+
+                    roomData.Players.Add(newPlayer);
                 }
 
-                var newPlayer = new Player
-                {
-                    Name = playerName,
-                    IsHost = false,
-                    ConnectionId = Context.ConnectionId,
-                    Score = 0
-                };
-
-                roomData.Players.Add(newPlayer);
                 await Groups.AddToGroupAsync(Context.ConnectionId, roomCode);
 
                 _logger.LogInformation("Player {PlayerName} joined room {RoomCode}", playerName, roomCode);
@@ -398,8 +432,8 @@ namespace PokemonQuizAPI.Hubs
                 // Notify all players in the room
                 await Clients.Group(roomCode).SendAsync("PlayerJoined", new
                 {
-                    playerName = newPlayer.Name,
-                    players = roomData.Players.Select(p => new { p.Name, p.IsHost, p.Score })
+                    playerName = playerName,
+                    players = Rooms[roomCode].Players.Select(p => new { p.Name, p.IsHost, p.Score })
                 });
 
                 // Send joined confirmation to caller, include current question if present
@@ -410,7 +444,15 @@ namespace PokemonQuizAPI.Hubs
                     try
                     {
                         var normalizedQ = roomData.CurrentQuestion is JObject j ? j : JObject.FromObject(roomData.CurrentQuestion);
-                        currentQuestion = ConvertNormalizedToPlainObject((JObject)normalizedQ);
+                        // If this is a compare-stat question, return it as plain object so clients receive expected fields
+                        if (normalizedQ is JObject nj && IsCompareQuestion(nj))
+                        {
+                            currentQuestion = nj;
+                        }
+                        else
+                        {
+                            currentQuestion = ConvertNormalizedToPlainObject((JObject)normalizedQ);
+                        }
                     }
                     catch
                     {
@@ -449,11 +491,16 @@ namespace PokemonQuizAPI.Hubs
                 if (!Rooms.TryGetValue(roomCode, out var roomData))
                     return;
 
-                var player = roomData.Players.FirstOrDefault(p => p.ConnectionId == Context.ConnectionId);
-                if (player == null)
-                    return;
+                Player? player = null;
+                lock (roomData.SyncRoot)
+                {
+                    player = roomData.Players.FirstOrDefault(p => p.ConnectionId == Context.ConnectionId);
+                    if (player == null)
+                        return;
 
-                roomData.Players.Remove(player);
+                    roomData.Players.Remove(player);
+                }
+
                 await Groups.RemoveFromGroupAsync(Context.ConnectionId, roomCode);
 
                 if (roomData.Players.Count == 0)
@@ -478,7 +525,7 @@ namespace PokemonQuizAPI.Hubs
                             Rooms.TryRemove(roomCode, out _);
                             try
                             {
-                                await _db.EndGameRoomAsync(roomCode);
+                                await _gameRoomRepo.EndGameRoomAsync(roomCode, cts.Token);
                                 _logger.LogInformation("Marked room {RoomCode} inactive in DB after grace period", roomCode);
                             }
                             catch (Exception ex)
@@ -516,10 +563,14 @@ namespace PokemonQuizAPI.Hubs
                     // If host left but players remain, assign new host
                     if (player.IsHost && roomData.Players.Count > 0)
                     {
-                        var newHost = roomData.Players[0];
-                        newHost.IsHost = true;
-                        _logger.LogInformation("Host left room {RoomCode}; new host is {NewHost}", roomCode, newHost.Name);
-                        await Clients.Group(roomCode).SendAsync("NewHost", newHost.Name);
+                        lock (roomData.SyncRoot)
+                        {
+                            var newHost = roomData.Players[0];
+                            newHost.IsHost = true;
+                            _logger.LogInformation("Host left room {RoomCode}; new host is {NewHost}", roomCode, newHost.Name);
+                        }
+
+                        await Clients.Group(roomCode).SendAsync("NewHost", roomData.Players[0].Name);
                     }
 
                     await Clients.Group(roomCode).SendAsync("PlayerLeft", new
@@ -556,16 +607,28 @@ namespace PokemonQuizAPI.Hubs
                 }
 
                 // reset players' scores when starting a new game
-                foreach (var p in roomData.Players)
+                lock (roomData.SyncRoot)
                 {
-                    p.Score = 0;
+                    foreach (var p in roomData.Players)
+                    {
+                        p.Score = 0;
+                    }
                 }
 
                 // Try to generate the first question before marking the game as started
                 JObject? questionObj = null;
                 try
                 {
-                    questionObj = await GenerateRandomQuestionAsync();
+                    // generate based on selected game id
+                    var selectedGame = roomData.SelectedGameId ?? string.Empty;
+                    if (selectedGame.Equals("higher-or-lower", StringComparison.OrdinalIgnoreCase) || selectedGame.Equals("compare-stat", StringComparison.OrdinalIgnoreCase))
+                    {
+                        questionObj = await GenerateRandomCompareQuestionAsync();
+                    }
+                    else
+                    {
+                        questionObj = await GenerateRandomQuestionAsync();
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -579,13 +642,10 @@ namespace PokemonQuizAPI.Hubs
                     return;
                 }
 
-                // We have a valid question — start the game and broadcast
+                // We have a valid question — start the game
                 roomData.GameStarted = true;
 
                 _logger.LogInformation("Game started in room {RoomCode} by {HostName}", roomCode, host.Name);
-
-                // include selected game id so clients know which game to navigate to
-                await Clients.Group(roomCode).SendAsync("GameStarted", roomData.SelectedGameId);
 
                 try
                 {
@@ -602,16 +662,116 @@ namespace PokemonQuizAPI.Hubs
                         _logger.LogWarning(ex, "Failed to create persistent GameSession for room {RoomCode}", roomCode);
                     }
 
-                    // Normalize and store the generated question, then broadcast
-                    var normalized = BuildNormalizedQuestion(questionObj);
-                    roomData.CurrentQuestion = normalized;
-                    roomData.QuestionStartedAt = DateTime.UtcNow;
-                    roomData.Submissions = new Dictionary<string, object>();
+                    // For compare-stat/higher-or-lower we prefer to build and store the plain compare object
+                    if ((roomData.SelectedGameId ?? string.Empty).Equals("higher-or-lower", StringComparison.OrdinalIgnoreCase) || (roomData.SelectedGameId ?? string.Empty).Equals("compare-stat", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var aName = questionObj.SelectToken("pokemonAName")?.ToString() ?? questionObj.SelectToken("PokemonAName")?.ToString() ?? string.Empty;
+                        var aImg = questionObj.SelectToken("pokemonAImageUrl")?.ToString() ?? questionObj.SelectToken("PokemonAImageUrl")?.ToString() ?? string.Empty;
+                        var aVal = questionObj.SelectToken("pokemonAValue")?.ToObject<int?>();
 
-                    _logger.LogInformation("Broadcasting Question for room {RoomCode}: {Question}", roomCode, normalized.ToString());
+                        var bName = questionObj.SelectToken("pokemonBName")?.ToString() ?? questionObj.SelectToken("PokemonBName")?.ToString() ?? string.Empty;
+                        var bImg = questionObj.SelectToken("pokemonBImageUrl")?.ToString() ?? questionObj.SelectToken("PokemonBImageUrl")?.ToString() ?? string.Empty;
+                        var bVal = questionObj.SelectToken("pokemonBValue")?.ToObject<int?>();
 
-                    var plain = ConvertNormalizedToPlainObject(normalized);
-                    await Clients.Group(roomCode).SendAsync("Question", plain);
+                        var stat = questionObj.SelectToken("statToCompare")?.ToString() ?? string.Empty;
+
+                        var plainOut = new {
+                            pokemonAId = questionObj.SelectToken("pokemonAId")?.ToString() ?? questionObj.SelectToken("PokemonAId")?.ToString() ?? string.Empty,
+                            pokemonAName = aName,
+                            pokemonAImageUrl = aImg,
+                            pokemonAValue = aVal,
+                            pokemonBId = questionObj.SelectToken("pokemonBId")?.ToString() ?? questionObj.SelectToken("PokemonBId")?.ToString() ?? string.Empty,
+                            pokemonBName = bName,
+                            pokemonBImageUrl = bImg,
+                            pokemonBValue = bVal,
+                            statToCompare = stat
+                        };
+
+                        lock (roomData.SyncRoot)
+                        {
+                            roomData.CurrentQuestion = JObject.FromObject(plainOut);
+                            roomData.QuestionStartedAt = DateTime.UtcNow;
+                            roomData.Submissions = new Dictionary<string, object>();
+                            roomData.QuestionsSent = 1;
+                        }
+
+                        // Send GameStarted with full payload so clients navigate and receive question
+                        var gsPayload = new {
+                            gameId = roomData.SelectedGameId,
+                            currentQuestion = plainOut,
+                            questionStartedAt = roomData.QuestionStartedAt.HasValue ? roomData.QuestionStartedAt.Value.ToString("o") : null
+                        };
+                        await Clients.Group(roomCode).SendAsync("GameStarted", gsPayload);
+                        _logger.LogInformation("Sent GameStarted with currentQuestion for room {RoomCode}", roomCode);
+
+                        // ALSO broadcast Question for any clients that missed GameStarted or use old handler
+                        _logger.LogInformation("Broadcasting Question for room {RoomCode}: {Question}", roomCode, JObject.FromObject(plainOut).ToString());
+                        await Clients.Group(roomCode).SendAsync("Question", plainOut);
+
+                        // If this was the final question, schedule EndGame after the question timeout to ensure game ends even if players don't submit
+                        if (roomData.QuestionsSent >= MAX_QUESTIONS_PER_GAME)
+                        {
+                            _ = Task.Run(async () =>
+                            {
+                                try
+                                {
+                                    var delay = TimeSpan.FromMilliseconds(QuestionTimeoutMs + 1500);
+                                    _logger.LogInformation("Scheduled EndGame for room {RoomCode} in {Delay} because max questions reached", roomCode, delay);
+                                    await Task.Delay(delay);
+                                    await EndGame(roomCode);
+                                }
+                                catch (Exception ex)
+                                {
+                                    _logger.LogWarning(ex, "Scheduled EndGame failed for room {RoomCode}", roomCode);
+                                }
+                            });
+                        }
+                    }
+                    else
+                    {
+                        var normalized = BuildNormalizedQuestion(questionObj);
+                        var plain = ConvertNormalizedToPlainObject(normalized);
+
+                        lock (roomData.SyncRoot)
+                        {
+                            roomData.CurrentQuestion = normalized;
+                            roomData.QuestionStartedAt = DateTime.UtcNow;
+                            roomData.Submissions = new Dictionary<string, object>();
+                            roomData.QuestionsSent = 1;
+                        }
+
+                        // Send GameStarted with full payload so clients navigate and receive question
+                        var gsPayload2 = new {
+                            gameId = roomData.SelectedGameId,
+                            currentQuestion = plain,
+                            questionStartedAt = roomData.QuestionStartedAt.HasValue ? roomData.QuestionStartedAt.Value.ToString("o") : null
+                        };
+                        await Clients.Group(roomCode).SendAsync("GameStarted", gsPayload2);
+                        _logger.LogInformation("Sent GameStarted with currentQuestion for room {RoomCode}", roomCode);
+
+                        // ALSO broadcast Question for any clients that missed GameStarted or use old handler
+                        _logger.LogInformation("Broadcasting Question for room {RoomCode}: {Question}", roomCode, JObject.FromObject(plain).ToString());
+                        await Clients.Group(roomCode).SendAsync("Question", plain);
+
+                        // If this was the final question, schedule EndGame after the question timeout to ensure game ends even if players don't submit
+                        if (roomData.QuestionsSent >= MAX_QUESTIONS_PER_GAME)
+                        {
+                            _ = Task.Run(async () =>
+                            {
+                                try
+                                {
+                                    var delay = TimeSpan.FromMilliseconds(QuestionTimeoutMs + 1500);
+                                    _logger.LogInformation("Scheduled EndGame for room {RoomCode} in {Delay} because max questions reached", roomCode, delay);
+                                    await Task.Delay(delay);
+                                    await EndGame(roomCode);
+                                }
+                                catch (Exception ex)
+                                {
+                                    _logger.LogWarning(ex, "Scheduled EndGame failed for room {RoomCode}", roomCode);
+                                }
+                            });
+                        }
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -632,7 +792,7 @@ namespace PokemonQuizAPI.Hubs
                 var allPokemon = await _db.GetAllPokemonAsync();
                 if (allPokemon == null || allPokemon.Count == 0) return null;
 
-                var random = new Random();
+                var random = Random.Shared;
                 var selected = allPokemon[random.Next(allPokemon.Count)];
 
                 var stats = new Dictionary<string, int>
@@ -682,6 +842,62 @@ namespace PokemonQuizAPI.Hubs
             }
         }
 
+        private async Task<JObject?> GenerateRandomCompareQuestionAsync()
+        {
+            try
+            {
+                var all = await _db.GetAllPokemonAsync();
+                if (all == null || all.Count == 0) return null;
+
+                var rnd = Random.Shared;
+                var a = all[rnd.Next(all.Count)];
+
+                int aTotal = a.Hp + a.Attack + a.Defence + a.SpecialAttack + a.SpecialDefence + a.Speed;
+
+                var candidates = all
+                    .Where(p => p.Id != a.Id)
+                    .OrderBy(p => Math.Abs((p.Hp + p.Attack + p.Defence + p.SpecialAttack + p.SpecialDefence + p.Speed) - aTotal))
+                    .Take(12)
+                    .ToList();
+
+                PokemonData b;
+                if (candidates.Count == 0)
+                {
+                    b = all[rnd.Next(all.Count)];
+                    if (b.Id == a.Id) b = all[(all.IndexOf(a) + 1) % all.Count];
+                }
+                else
+                {
+                    b = candidates[rnd.Next(candidates.Count)];
+                }
+
+                var statKeys = new[] { "HP", "Attack", "Defence", "Special Attack", "Special Defence", "Speed" };
+                var statName = statKeys[rnd.Next(statKeys.Length)];
+                int aVal = GetStatValueByName(a, statName);
+                int bVal = GetStatValueByName(b, statName);
+
+                var obj = new JObject
+                {
+                    ["pokemonAId"] = a.Id,
+                    ["pokemonAName"] = a.Name,
+                    ["pokemonAImageUrl"] = a.ImageUrl ?? string.Empty,
+                    ["pokemonAValue"] = aVal,
+                    ["pokemonBId"] = b.Id,
+                    ["pokemonBName"] = b.Name,
+                    ["pokemonBImageUrl"] = b.ImageUrl ?? string.Empty,
+                    ["pokemonBValue"] = bVal,
+                    ["statToCompare"] = statName
+                };
+
+                return obj;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error generating compare-stat question");
+                return null;
+            }
+        }
+
         // ------------------ Send Question (host only) ------------------
         public async Task SendQuestionToRoom(string roomCode, object questionData)
         {
@@ -707,6 +923,25 @@ namespace PokemonQuizAPI.Hubs
                     return;
                 }
 
+                // Disallow sending additional questions once max reached. Do not await inside lock.
+                bool maxReached;
+                lock (roomData.SyncRoot)
+                {
+                    maxReached = roomData.QuestionsSent >= MAX_QUESTIONS_PER_GAME;
+                }
+
+                if (maxReached)
+                {
+                    _logger.LogInformation("Host attempted to send question but max questions reached for room {RoomCode}", roomCode);
+                    try { await Clients.Caller.SendAsync("Error", "Maximum questions reached. Ending game."); } catch { }
+                    // End game (fire-and-forget to avoid deadlocks)
+                    _ = Task.Run(async () =>
+                    {
+                        try { await EndGame(roomCode); } catch (Exception ex) { _logger.LogWarning(ex, "EndGame failed for room {RoomCode}", roomCode); }
+                    });
+                    return;
+                }
+
                 JObject? questionObj = null;
                 try
                 {
@@ -726,7 +961,16 @@ namespace PokemonQuizAPI.Hubs
                     (questionObj.SelectToken("correctValue") == null && questionObj.SelectToken("CorrectValue") == null && questionObj.SelectToken("correct_value") == null))
                 {
                     _logger.LogInformation("Incoming question payload was empty or malformed for room {RoomCode}, generating server-side question as fallback", roomCode);
-                    questionObj = await GenerateRandomQuestionAsync();
+
+                    if ((roomData.SelectedGameId ?? string.Empty).Equals("higher-or-lower", StringComparison.OrdinalIgnoreCase) || (roomData.SelectedGameId ?? string.Empty).Equals("compare-stat", StringComparison.OrdinalIgnoreCase))
+                    {
+                        questionObj = await GenerateRandomCompareQuestionAsync();
+                    }
+                    else
+                    {
+                        questionObj = await GenerateRandomQuestionAsync();
+                    }
+
                     if (questionObj == null)
                     {
                         await Clients.Caller.SendAsync("Error", "Failed to generate question on server.");
@@ -734,18 +978,60 @@ namespace PokemonQuizAPI.Hubs
                     }
                 }
 
-                // Normalize outgoing shape to ensure clients receive consistent fields
-                var normalized = BuildNormalizedQuestion(questionObj);
+                // If compare-stat selected, build and store the plain compare object directly
+                if ((roomData.SelectedGameId ?? string.Empty).Equals("higher-or-lower", StringComparison.OrdinalIgnoreCase) || (roomData.SelectedGameId ?? string.Empty).Equals("compare-stat", StringComparison.OrdinalIgnoreCase))
+                {
+                    var aName = questionObj.SelectToken("pokemonAName")?.ToString() ?? string.Empty;
+                    var aImg = questionObj.SelectToken("pokemonAImageUrl")?.ToString() ?? string.Empty;
+                    var aVal = questionObj.SelectToken("pokemonAValue")?.ToObject<int?>();
 
-                roomData.CurrentQuestion = normalized;
-                roomData.QuestionStartedAt = DateTime.UtcNow;
-                roomData.Submissions = new Dictionary<string, object>();
+                    var bName = questionObj.SelectToken("pokemonBName")?.ToString() ?? string.Empty;
+                    var bImg = questionObj.SelectToken("pokemonBImageUrl")?.ToString() ?? string.Empty;
+                    var bVal = questionObj.SelectToken("pokemonBValue")?.ToObject<int?>();
 
-                _logger.LogInformation("SendQuestionToRoom broadcasting for {RoomCode}: {Question}", roomCode, normalized.ToString());
+                    var stat = questionObj.SelectToken("statToCompare")?.ToString() ?? string.Empty;
 
-                // convert to simple serializable object
-                var plainOut = ConvertNormalizedToPlainObject(normalized);
-                await Clients.Group(roomCode).SendAsync("Question", plainOut);
+                    var plainOut = new {
+                        pokemonAId = questionObj.SelectToken("pokemonAId")?.ToString() ?? string.Empty,
+                        pokemonAName = aName,
+                        pokemonAImageUrl = aImg,
+                        pokemonAValue = aVal,
+                        pokemonBId = questionObj.SelectToken("pokemonBId")?.ToString() ?? string.Empty,
+                        pokemonBName = bName,
+                        pokemonBImageUrl = bImg,
+                        pokemonBValue = bVal,
+                        statToCompare = stat
+                    };
+
+                    lock (roomData.SyncRoot)
+                    {
+                        roomData.CurrentQuestion = JObject.FromObject(plainOut);
+                        roomData.QuestionStartedAt = DateTime.UtcNow;
+                        roomData.Submissions = new Dictionary<string, object>();
+                        roomData.QuestionsSent = (roomData.QuestionsSent <= 0) ? 1 : roomData.QuestionsSent + 1;
+                    }
+
+                    // Broadcast the question first so clients receive question payload
+                    _logger.LogInformation("SendQuestionToRoom broadcasting for {RoomCode}: {Question}", roomCode, JObject.FromObject(plainOut).ToString());
+                    await Clients.Group(roomCode).SendAsync("Question", plainOut);
+                }
+                else
+                {
+                    // Non-compare questions: normalize and send the plain converted object
+                    var normalized = BuildNormalizedQuestion(questionObj);
+                    var plain = ConvertNormalizedToPlainObject(normalized);
+
+                    lock (roomData.SyncRoot)
+                    {
+                        roomData.CurrentQuestion = normalized;
+                        roomData.QuestionStartedAt = DateTime.UtcNow;
+                        roomData.Submissions = new Dictionary<string, object>();
+                        roomData.QuestionsSent = (roomData.QuestionsSent <= 0) ? 1 : roomData.QuestionsSent + 1;
+                    }
+
+                    _logger.LogInformation("SendQuestionToRoom broadcasting for {RoomCode}: {Question}", roomCode, JObject.FromObject(plain).ToString());
+                    await Clients.Group(roomCode).SendAsync("Question", plain);
+                }
             }
             catch (Exception ex)
             {
@@ -818,10 +1104,12 @@ namespace PokemonQuizAPI.Hubs
                 var speedBonus = (int)Math.Round((timeLeftMs / (double)QuestionTimeoutMs) * maxBonus);
                 int points = correct ? basePoints + speedBonus : 0;
 
-                player.Score += points;
-
-                // store playerName and points with submission so clients can display who answered what and awarded points
-                roomData.Submissions[Context.ConnectionId] = new { selectedValue, timeTakenMs, correct, playerName = player.Name, points };
+                lock (roomData.SyncRoot)
+                {
+                    player.Score += points;
+                    // store playerName and points with submission so clients can display who answered what and awarded points
+                    roomData.Submissions[Context.ConnectionId] = new { selectedValue, timeTakenMs, correct, playerName = player.Name, points };
+                }
 
                 _logger.LogInformation("Player {Player} submitted {Value} (correct={Correct}) in room {RoomCode} and earned {Points}", player.Name, selectedValue, correct, roomCode, points);
 
@@ -837,6 +1125,32 @@ namespace PokemonQuizAPI.Hubs
                 catch (Exception ex)
                 {
                     _logger.LogWarning(ex, "Failed to update GameSession score for room {RoomCode}", roomCode);
+                }
+
+                // Persist individual user question for analytics / replay if we have a current session id
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(roomData.CurrentSessionId))
+                    {
+                        var answerPayload = new
+                        {
+                            playerName = player.Name,
+                            connectionId = Context.ConnectionId,
+                            selectedValue,
+                            timeTakenMs,
+                            correct,
+                            question = question
+                        };
+
+                        var json = JsonSerializer.Serialize(answerPayload);
+                        // question_id is unknown for server-generated questions; store NULL
+                        await _db.InsertUserQuestionAsync(Guid.NewGuid().ToString(), roomData.CurrentSessionId, null, json, correct);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to persist UserQuestion for session {SessionId} in room {RoomCode}", roomData.CurrentSessionId, roomCode);
+                    // continue without failing the request
                 }
 
                 try
@@ -870,6 +1184,17 @@ namespace PokemonQuizAPI.Hubs
                             submissions = roomData.Submissions.Select(kv => new { connectionId = kv.Key, data = kv.Value }),
                             leaderboard
                         });
+
+                        // If we've reached the max questions, end the game and broadcast final leaderboard
+                        if (roomData.QuestionsSent >= MAX_QUESTIONS_PER_GAME)
+                        {
+                            _logger.LogInformation("Max questions reached in room {RoomCode}, ending game", roomCode);
+                            // fire-and-forget EndGame so we don't block current flow
+                            _ = Task.Run(async () =>
+                            {
+                                try { await EndGame(roomCode); } catch (Exception ex) { _logger.LogWarning(ex, "EndGame failed for room {RoomCode}", roomCode); }
+                            });
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -880,6 +1205,184 @@ namespace PokemonQuizAPI.Hubs
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error submitting answer in room {RoomCode}", roomCode);
+                try { await Clients.Caller.SendAsync("Error", "Server error submitting answer."); } catch { }
+            }
+        }
+
+        // ------------------ Submit Compare Answer (clients) ------------------
+        public async Task SubmitCompareAnswer(string roomCode, string selectedSide, int timeTakenMs)
+        {
+            try
+            {
+                roomCode = roomCode.ToUpper();
+                if (!Rooms.TryGetValue(roomCode, out var roomData) || roomData.CurrentQuestion == null)
+                    return;
+
+                var player = roomData.Players.FirstOrDefault(p => p.ConnectionId == Context.ConnectionId);
+                if (player == null)
+                    return;
+
+                JObject? question = null;
+                try
+                {
+                    if (roomData.CurrentQuestion is JObject jq) question = jq;
+                    else question = roomData.CurrentQuestion is string s ? JObject.Parse(s) : JObject.FromObject(roomData.CurrentQuestion);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to parse CurrentQuestion for room {RoomCode}", roomCode);
+                    await Clients.Caller.SendAsync("Error", "Server error processing question data.");
+                    return;
+                }
+
+                if (question == null)
+                {
+                    _logger.LogWarning("CurrentQuestion was null after conversion for room {RoomCode}", roomCode);
+                    await Clients.Caller.SendAsync("Error", "Server missing question data.");
+                    return;
+                }
+
+                var aValToken = question.SelectToken("pokemonAValue") ?? question.SelectToken("PokemonAValue") ?? question.SelectToken("pokemon_a_value");
+                var bValToken = question.SelectToken("pokemonBValue") ?? question.SelectToken("PokemonBValue") ?? question.SelectToken("pokemon_b_value");
+
+                int aVal = 0, bVal = 0;
+                if (aValToken != null)
+                {
+                    if (aValToken.Type == JTokenType.Integer || aValToken.Type == JTokenType.Float) aVal = aValToken.ToObject<int>();
+                    else int.TryParse(aValToken.ToString(), out aVal);
+                }
+                if (bValToken != null)
+                {
+                    if (bValToken.Type == JTokenType.Integer || bValToken.Type == JTokenType.Float) bVal = bValToken.ToObject<int>();
+                    else int.TryParse(bValToken.ToString(), out bVal);
+                }
+
+                string? correctSide = null;
+                string? correctName = null;
+                if (aVal == bVal)
+                {
+                    correctSide = "either";
+                    correctName = question.SelectToken("pokemonAName")?.ToString() ?? question.SelectToken("PokemonAName")?.ToString();
+                }
+                else if (aVal > bVal)
+                {
+                    correctSide = "left";
+                    correctName = question.SelectToken("pokemonAName")?.ToString() ?? question.SelectToken("PokemonAName")?.ToString();
+                }
+                else
+                {
+                    correctSide = "right";
+                    correctName = question.SelectToken("pokemonBName")?.ToString() ?? question.SelectToken("PokemonBName")?.ToString();
+                }
+
+                bool correct = false;
+                if (correctSide == "either") correct = true;
+                else correct = string.Equals(selectedSide, correctSide, StringComparison.OrdinalIgnoreCase);
+
+                int basePoints = 1000;
+                int maxBonus = 500;
+                var timeLeftMs = Math.Max(0, QuestionTimeoutMs - timeTakenMs);
+                var speedBonus = (int)Math.Round((timeLeftMs / (double)QuestionTimeoutMs) * maxBonus);
+                int points = correct ? basePoints + speedBonus : 0;
+
+                lock (roomData.SyncRoot)
+                {
+                    player.Score += points;
+                    roomData.Submissions[Context.ConnectionId] = new { selectedSide, timeTakenMs, correct, playerName = player.Name, points };
+                }
+
+                _logger.LogInformation("Player {Player} submitted {Side} (correct={Correct}) in room {RoomCode} and earned {Points}", player.Name, selectedSide, correct, roomCode, points);
+
+                // Persist best score for session (use max player score)
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(roomData.CurrentSessionId))
+                    {
+                        var best = roomData.Players.Max(p => p.Score);
+                        await _db.UpdateGameSessionScoreAsync(roomData.CurrentSessionId, best);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to update GameSession score for room {RoomCode}", roomCode);
+                }
+
+                // Persist individual user question for analytics / replay if we have a current session id
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(roomData.CurrentSessionId))
+                    {
+                        var answerPayload = new
+                        {
+                            playerName = player.Name,
+                            connectionId = Context.ConnectionId,
+                            selectedSide,
+                            timeTakenMs,
+                            correct,
+                            question = question
+                        };
+
+                        var json = JsonSerializer.Serialize(answerPayload);
+                        await _db.InsertUserQuestionAsync(Guid.NewGuid().ToString(), roomData.CurrentSessionId, null, json, correct);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to persist UserQuestion for session {SessionId} in room {RoomCode}", roomData.CurrentSessionId, roomCode);
+                }
+
+                try
+                {
+                    await Clients.Group(roomCode).SendAsync("ScoreUpdated", new
+                    {
+                        playerName = player.Name,
+                        score = player.Score,
+                        players = roomData.Players.Select(p => new { p.Name, p.Score }).OrderByDescending(p => p.Score)
+                    });
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to send ScoreUpdated for room {RoomCode}", roomCode);
+                }
+
+                if (roomData.Submissions.Count >= roomData.Players.Count)
+                {
+                    try
+                    {
+                        var leaderboard = roomData.Players
+                            .Select(p => new { p.Name, p.Score })
+                            .OrderByDescending(p => p.Score)
+                            .ToList();
+
+                        _logger.LogInformation("All players answered in room {RoomCode}, broadcasting AllAnswered", roomCode);
+
+                        await Clients.Group(roomCode).SendAsync("AllAnswered", new
+                        {
+                            message = "All players have answered",
+                            submissions = roomData.Submissions.Select(kv => new { connectionId = kv.Key, data = kv.Value }),
+                            leaderboard
+                        });
+
+                        // If we've reached the max questions, end the game and broadcast final leaderboard
+                        if (roomData.QuestionsSent >= MAX_QUESTIONS_PER_GAME)
+                        {
+                            _logger.LogInformation("Max questions reached in room {RoomCode}, ending game", roomCode);
+                            // fire-and-forget EndGame so we don't block current flow
+                            _ = Task.Run(async () =>
+                            {
+                                try { await EndGame(roomCode); } catch (Exception ex) { _logger.LogWarning(ex, "EndGame failed for room {RoomCode}", roomCode); }
+                            });
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to send AllAnswered for room {RoomCode}", roomCode);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error submitting compare answer in room {RoomCode}", roomCode);
                 try { await Clients.Caller.SendAsync("Error", "Server error submitting answer."); } catch { }
             }
         }
@@ -900,7 +1403,23 @@ namespace PokemonQuizAPI.Hubs
                     .ToList();
 
                 // Broadcast game over with leaderboard and roomCode (so clients can offer replay)
-                await Clients.Group(roomCode).SendAsync("GameOver", new { leaderboard, roomCode });
+                // Use try-catch: if Clients is disposed (hub already torn down), log and skip broadcast
+                try
+                {
+                    if (Clients != null)
+                    {
+                        await Clients.Group(roomCode).SendAsync("GameOver", new { leaderboard, roomCode });
+                        _logger.LogInformation("Sent GameOver broadcast for room {RoomCode}", roomCode);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("EndGame called for room {RoomCode} but Hub.Clients is disposed; GameOver broadcast skipped", roomCode);
+                    }
+                }
+                catch (ObjectDisposedException)
+                {
+                    _logger.LogWarning("EndGame: Hub disposed before GameOver broadcast for room {RoomCode}", roomCode);
+                }
 
                 // Persist final session score and end session
                 try
@@ -917,10 +1436,10 @@ namespace PokemonQuizAPI.Hubs
                     _logger.LogWarning(ex, "Failed to finalize GameSession for room {RoomCode}", roomCode);
                 }
 
-                // Persist room ended in DB
+                // Persist room ended in DB - use CancellationToken.None since Context may be disposed
                 try
                 {
-                    await _db.EndGameRoomAsync(roomCode);
+                    await _gameRoomRepo.EndGameRoomAsync(roomCode, CancellationToken.None);
                 }
                 catch (Exception ex)
                 {
@@ -932,7 +1451,7 @@ namespace PokemonQuizAPI.Hubs
                 roomData.QuestionStartedAt = null;
                 roomData.CurrentSessionId = null;
 
-                _logger.LogInformation("Room {RoomCode} game ended by request; GameOver broadcast sent", roomCode);
+                _logger.LogInformation("Room {RoomCode} game ended by request; GameOver broadcast attempted", roomCode);
             }
             catch (Exception ex)
             {
@@ -940,70 +1459,10 @@ namespace PokemonQuizAPI.Hubs
             }
         }
 
-        // ------------------ Update Score ------------------
-        public async Task UpdateScore(string roomCode, int scoreChange)
-        {
-            try
-            {
-                roomCode = roomCode.ToUpper();
-
-                if (!Rooms.TryGetValue(roomCode, out var roomData))
-                    return;
-
-                var player = roomData.Players.FirstOrDefault(p => p.ConnectionId == Context.ConnectionId);
-                if (player == null)
-                    return;
-
-                player.Score += scoreChange;
-
-                // Persist best score for session (use max player score)
-                try
-                {
-                    if (!string.IsNullOrWhiteSpace(roomData.CurrentSessionId))
-                    {
-                        var best = roomData.Players.Max(p => p.Score);
-                        await _db.UpdateGameSessionScoreAsync(roomData.CurrentSessionId, best);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Failed to update GameSession score for room {RoomCode}", roomCode);
-                }
-
-                await Clients.Group(roomCode).SendAsync("ScoreUpdated", new
-                {
-                    playerName = player.Name,
-                    score = player.Score,
-                    players = roomData.Players.Select(p => new { p.Name, p.Score })
-                        .OrderByDescending(p => p.Score)
-                });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error updating score in room {RoomCode}", roomCode);
-            }
-        }
-
-        // ------------------ On Disconnect ------------------
-        public override async Task OnDisconnectedAsync(Exception? exception)
-        {
-            foreach (var room in Rooms.Values)
-            {
-                var player = room.Players.FirstOrDefault(p => p.ConnectionId == Context.ConnectionId);
-                if (player != null)
-                {
-                    await LeaveRoom(room.RoomCode);
-                    break;
-                }
-            }
-
-            await base.OnDisconnectedAsync(exception);
-        }
-
         private static string GenerateRoomCode()
         {
             const string chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-            var random = new Random();
+            var random = Random.Shared;
             return new string(Enumerable.Range(0, 4).Select(_ => chars[random.Next(chars.Length)]).ToArray());
         }
 
@@ -1023,7 +1482,14 @@ namespace PokemonQuizAPI.Hubs
                 try
                 {
                     var normalizedQ = roomData.CurrentQuestion is JObject j ? j : JObject.FromObject(roomData.CurrentQuestion);
-                    currentQuestion = ConvertNormalizedToPlainObject((JObject)normalizedQ);
+                    if (normalizedQ is JObject nj && IsCompareQuestion(nj))
+                    {
+                        currentQuestion = nj;
+                    }
+                    else
+                    {
+                        currentQuestion = ConvertNormalizedToPlainObject((JObject)normalizedQ);
+                    }
                 }
                 catch
                 {
@@ -1148,6 +1614,26 @@ namespace PokemonQuizAPI.Hubs
         public static bool TryRemoveRoom(string roomCode)
         {
             return Rooms.TryRemove(roomCode.ToUpper(), out _);
+        }
+
+        private static int GetStatValueByName(PokemonData p, string statName)
+        {
+            return statName switch
+            {
+                "HP" => p.Hp,
+                "Attack" => p.Attack,
+                "Defence" => p.Defence,
+                "Special Attack" => p.SpecialAttack,
+                "Special Defence" => p.SpecialDefence,
+                "Speed" => p.Speed,
+                _ => 0
+            };
+        }
+
+        private static bool IsCompareQuestion(JObject j)
+        {
+            if (j == null) return false;
+            return j.SelectToken("pokemonAName") != null || j.SelectToken("pokemonBName") != null || j.SelectToken("pokemonAImageUrl") != null || j.SelectToken("pokemonBImageUrl") != null || j.SelectToken("statToCompare") != null;
         }
     }
 }

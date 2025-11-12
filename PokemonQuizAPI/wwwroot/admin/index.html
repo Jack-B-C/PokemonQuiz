@@ -5,54 +5,241 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Admin Dashboard</title>
     <style>
-      body { font-family: Arial, Helvetica, sans-serif; margin:0; }
-      .sidebar { width:200px; background:#0b2b5a; color:#fff; height:100vh; padding:20px; box-sizing:border-box; float:left }
-      .content { margin-left:200px; padding:20px }
-      .card { background:#fff; padding:16px; border-radius:6px; box-shadow:0 2px 6px rgba(0,0,0,0.1); margin-bottom:12px }
-      table { width:100%; border-collapse:collapse }
-      th,td { padding:8px; border-bottom:1px solid #eee }
-      .btn { display:inline-block; padding:8px 12px; background:#123e7a; color:#fff; border-radius:6px; text-decoration:none }
+      :root{ --sidebar:#0b2b5a; --accent:#123e7a; --card:#fff; --muted:#6b7280 }
+      body { font-family: Arial, Helvetica, sans-serif; margin:0; display:flex; min-height:100vh; }
+      .sidebar { width:220px; background:var(--sidebar); color:#fff; padding:18px 14px; box-sizing:border-box }
+      .sidebar h2{ margin:0 0 8px 0; font-size:18px }
+      .sidebar .user { display:flex; gap:8px; align-items:center; margin-bottom:18px }
+      .sidebar nav a{ display:block; color:#fff; text-decoration:none; padding:10px 8px; border-radius:6px; margin-bottom:6px }
+      .sidebar nav a.active{ background:rgba(255,255,255,0.06) }
+      .content { flex:1; padding:22px; background:#f3f4f6 }
+      .header { display:flex; align-items:center; justify-content:space-between }
+      .title { font-size:28px; font-weight:700 }
+      .metrics { display:flex; gap:16px; margin-top:18px }
+      .card { background:var(--card); padding:14px 18px; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,0.06) }
+      .metric { width:180px; text-align:center }
+      .metric .num { font-size:28px; font-weight:800; color:var(--accent) }
+      .layout { display:flex; gap:18px; margin-top:20px }
+      .col { flex:1 }
+      table{ width:100%; border-collapse:collapse }
+      th,td{ padding:8px 10px; border-bottom:1px solid #e6e6e6; text-align:left }
+      th{ background:#fafafa; font-weight:700 }
+      .actions button{ margin-right:6px }
+      .btn { background:var(--accent); color:#fff; border:none; padding:8px 12px; border-radius:6px; cursor:pointer }
+      .btn.ghost{ background:transparent; color:var(--accent); border:1px solid #dbeafe }
+      .small { padding:6px 8px; font-size:13px }
+      .muted{ color:var(--muted) }
+      .center{text-align:center}
+      /* responsive */
+      @media (max-width:900px){ .layout{ flex-direction:column } .metrics{ flex-wrap:wrap } .metric{ width:48% } .sidebar{ display:none } }
+      /* modal */
+      .modal{ position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,0.5) }
+      .modal.open{ display:flex }
+      .modal .panel{ width:90%; max-width:800px; background:#fff; padding:18px; border-radius:10px }
+      .flex { display:flex; gap:12px; align-items:center }
     </style>
   </head>
   <body>
     <div class="sidebar">
       <h2>Admin Dashboard</h2>
-      <p><a href="#" style="color:#fff; text-decoration:none">Dashboard</a></p>
-      <p><a href="#rooms" style="color:#fff; text-decoration:none">Rooms</a></p>
-      <p><a href="#users" style="color:#fff; text-decoration:none">Users</a></p>
+      <div class="user">
+        <div id="adminAvatar" style="width:36px;height:36px;border-radius:18px;background:#fff;color:var(--sidebar);display:flex;align-items:center;justify-content:center;font-weight:700">J</div>
+        <div>
+          <div id="adminUsername">John Example</div>
+          <div id="adminRole" style="font-size:12px;opacity:0.9">Administrator</div>
+        </div>
+      </div>
+
+      <nav>
+        <a href="#dashboard" class="active" onclick="showSection('dashboard');return false">Dashboard</a>
+        <a href="#games" onclick="showSection('games');return false">Games</a>
+        <a href="#users" onclick="showSection('users');return false">Users</a>
+      </nav>
+
+      <div style="margin-top:12px">
+        <label style="font-size:12px;color:#dbeafe">Auth token (Bearer):</label><br/>
+        <input id="adminToken" style="width:100%;padding:8px;margin-top:6px;border-radius:6px;border:1px solid #d1d5db" placeholder="Paste token here" />
+        <div style="margin-top:8px;display:flex;gap:8px">
+          <button class="btn small" onclick="saveToken()">Save</button>
+          <button class="small" onclick="clearToken()" style="background:#ef4444;color:#fff;border:none;border-radius:6px">Clear</button>
+        </div>
+      </div>
     </div>
+
     <div class="content">
-      <h1>Dashboard</h1>
-      <div id="metrics"></div>
-      <h2>Active Rooms</h2>
-      <div id="rooms"></div>
+      <div class="header">
+        <div>
+          <div class="title">Dashboard</div>
+          <div style="color:var(--muted);margin-top:6px">Overview and management</div>
+        </div>
+        <div>
+          <button class="btn" onclick="refreshAll()">Refresh</button>
+        </div>
+      </div>
+
+      <div id="dashboard" class="section">
+        <div class="metrics">
+          <div class="card metric">
+            <div class="muted">Active players</div>
+            <div class="num" id="activePlayers">—</div>
+          </div>
+          <div class="card metric">
+            <div class="muted">Games played</div>
+            <div class="num" id="gamesPlayed">—</div>
+          </div>
+          <div class="card metric">
+            <div class="muted">Active rooms</div>
+            <div class="num" id="activeRooms">—</div>
+          </div>
+        </div>
+
+        <div class="layout">
+          <div class="col card">
+            <h3>Active Games</h3>
+            <div id="activeGamesArea">Loading...</div>
+            <div style="margin-top:12px;text-align:center"><button class="btn" onclick="showSection('games')">View All</button></div>
+          </div>
+
+          <div class="col card">
+            <h3>Users</h3>
+            <div id="usersArea">Loading...</div>
+            <div style="margin-top:12px;text-align:center"><button class="btn" onclick="showSection('users')">View All</button></div>
+          </div>
+        </div>
+
+        <div style="margin-top:18px" class="card">
+          <h3>Games</h3>
+          <div id="gamesArea">Loading...</div>
+          <div style="margin-top:12px;text-align:center"><button class="btn" onclick="showSection('games')">View All</button></div>
+        </div>
+      </div>
+
+      <div id="games" class="section" style="display:none">
+        <div class="card">
+          <h3>Games</h3>
+          <div id="gamesList">Loading...</div>
+        </div>
+      </div>
+
+      <div id="users" class="section" style="display:none">
+        <div class="card">
+          <h3>Users</h3>
+          <div id="usersList">Loading...</div>
+        </div>
+      </div>
+
     </div>
 
+    <div id="modal" class="modal"><div class="panel" id="modalPanel"></div></div>
+
+    <script src="/admin/token-helper.js"></script>
     <script>
-      async function refresh() {
-        const res = await fetch('/api/admin/dashboard');
-        const data = await res.json();
-        document.getElementById('metrics').innerHTML = `Active rooms: ${data.activeRooms} &mdash; Active players: ${data.activePlayers}`;
+      document.getElementById('adminToken').value = (localStorage.getItem('admin_token')||'');
+      function saveToken(){ const v = document.getElementById('adminToken').value || ''; localStorage.setItem('admin_token', v); alert('Token saved'); }
+      function clearToken(){ localStorage.removeItem('admin_token'); document.getElementById('adminToken').value = ''; alert('Token cleared'); }
 
-        const roomsDiv = document.getElementById('rooms');
-        roomsDiv.innerHTML = '';
-        data.rooms.forEach(r => {
-          const div = document.createElement('div');
-          div.className = 'card';
-          const players = (r.players || []).map(p => p.Name || p.name || '').join(', ');
-          div.innerHTML = `<strong>${r.roomCode}</strong><div>Game: ${r.selectedGameId || ''}</div><div>Players: ${players}</div><div style="margin-top:8px"><button onclick="endRoom('${r.roomCode}')" class="btn">End Room</button></div>`;
-          roomsDiv.appendChild(div);
-        });
+      async function loadAdminUser(){
+        try{
+          const res = await fetch('/api/admin/me');
+          if(!res.ok) return;
+          const js = await res.json();
+          document.getElementById('adminUsername').innerText = js.username || 'Administrator';
+          document.getElementById('adminRole').innerText = js.role ? js.role.charAt(0).toUpperCase() + js.role.slice(1) : 'Administrator';
+          document.getElementById('adminAvatar').innerText = (js.username||'A').charAt(0).toUpperCase();
+        }catch(e){}
       }
 
-      async function endRoom(code) {
-        if (!confirm('End room ' + code + '?')) return;
-        const res = await fetch('/api/admin/rooms/' + encodeURIComponent(code) + '/end', { method: 'POST' });
-        if (res.ok) refresh(); else alert('Failed');
+      function showSection(id){ document.querySelectorAll('.section').forEach(s=>s.style.display='none'); document.getElementById(id).style.display='block'; document.querySelectorAll('.sidebar nav a').forEach(a=>a.classList.remove('active')); document.querySelector('.sidebar nav a[onclick*="'+id+'"]')?.classList.add('active'); }
+
+      async function refreshAll(){ await Promise.all([ loadDashboard(), loadGames(), loadUsers() ]); }
+
+      async function loadDashboard(){
+        try{
+          const res = await fetch('/api/admin/dashboard', { headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('admin_token')||'') }});
+          if(!res.ok){ document.getElementById('activeGamesArea').innerText='Failed to load'; return; }
+          const js = await res.json();
+          document.getElementById('activePlayers').innerText = js.activePlayers ?? '0';
+          document.getElementById('activeRooms').innerText = js.activeRooms ?? '0';
+
+          const rooms = js.rooms || [];
+          if(rooms.length===0) document.getElementById('activeGamesArea').innerHTML = '<div class="muted">No active rooms</div>';
+          else{
+            const rows = rooms.map(r=>{
+              const players = (r.players||[]).map(p=>p.Name||p.name||'').join(', ');
+              return `<tr><td>${r.selectedGameId||''}</td><td>${players}</td><td>${r.createdAt||''}</td><td class="actions"><button class="small" onclick="endRoom('${r.roomCode}')">End</button></td></tr>`;
+            }).join('');
+            document.getElementById('activeGamesArea').innerHTML = `<table><thead><tr><th>Game</th><th>Players</th><th>Started</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+          }
+
+        }catch(err){ console.warn(err); document.getElementById('activeGamesArea').innerText='Failed'; }
       }
 
-      refresh();
-      setInterval(refresh, 5000);
+      async function loadUsers(){
+        try{
+          const res = await fetch('/api/admin/users', { headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('admin_token')||'') }});
+          if(!res.ok){ document.getElementById('usersArea').innerText='Failed to load users'; document.getElementById('usersList').innerText='Failed'; return; }
+          const js = await res.json();
+          const users = js.users || [];
+
+          if(users.length===0) document.getElementById('usersArea').innerHTML = '<div class="muted">No users</div>';
+          else{
+            const rows = users.slice(0,6).map(u=>`<tr><td>${u.username||''}</td><td>${u.email||''}</td><td>${u.hasPassword}</td><td class="actions"><a href="#" onclick="viewUser('${u.id}');return false">Details</a><button class="small" onclick="promoteUser('${u.id}')">Make Admin</button></td></tr>`).join('');
+            document.getElementById('usersArea').innerHTML = `<table><thead><tr><th>Name</th><th>Email</th><th>Has password</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+          }
+
+          const full = users.map(u=>`<tr><td>${u.username||''}</td><td>${u.email||''}</td><td>${u.hasPassword}</td><td><a href="#" onclick="viewUser('${u.id}');return false">Details</a></td></tr>`).join('');
+          document.getElementById('usersList').innerHTML = `<table><thead><tr><th>Name</th><th>Email</th><th>Has password</th><th></th></tr></thead><tbody>${full}</tbody></table>`;
+        }catch(err){ console.warn(err); document.getElementById('usersArea').innerText='Failed'; document.getElementById('usersList').innerText='Failed'; }
+      }
+
+      async function loadGames(){
+        try{
+          const res = await fetch('/api/game/modes');
+          if(!res.ok){ document.getElementById('gamesArea').innerText='Failed to load'; document.getElementById('gamesList').innerText='Failed'; return; }
+          const js = await res.json();
+          const modes = js || [];
+          if(modes.length===0) document.getElementById('gamesArea').innerHTML='<div class="muted">No games configured</div>';
+          else{
+            const rows = modes.map(m=>`<tr><td>${m.Name||m.name||m.Id||m.id}</td><td>${m.Description||m.description||''}</td><td class="actions"><a href="#" onclick="viewGame('${m.Id||m.id}');return false">Details</a></td></tr>`).join('');
+            document.getElementById('gamesArea').innerHTML = `<table><thead><tr><th>Game</th><th>Description</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+          }
+
+          const full = modes.map(m=>`<tr><td>${m.Name||m.name||m.Id||m.id}</td><td>${m.Description||m.description||''}</td><td><a href="#" onclick="viewGame('${m.Id||m.id}');return false">Details</a></td></tr>`).join('');
+          document.getElementById('gamesList').innerHTML = `<table><thead><tr><th>Game</th><th>Description</th><th></th></tr></thead><tbody>${full}</tbody></table>`;
+        }catch(err){ console.warn(err); document.getElementById('gamesArea').innerText='Failed'; document.getElementById('gamesList').innerText='Failed'; }
+      }
+
+      async function endRoom(code){ if(!confirm('End room ' + code + '?')) return; try{ const res = await fetch('/api/admin/rooms/' + encodeURIComponent(code) + '/end', { method: 'POST', headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('admin_token')||'') } }); if(res.ok) { alert('Ended'); refreshAll(); } else { alert('Failed to end room'); } }catch(e){ console.warn(e); alert('Failed'); } }
+
+      async function viewUser(id){
+        try{
+          const res = await fetch('/api/admin/users/' + encodeURIComponent(id) + '/stats', { headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('admin_token')||'') }});
+          if(!res.ok){ alert('Failed to fetch user stats'); return; }
+          const js = await res.json();
+          const stats = js.stats || [];
+          showModal(`<h3>User stats for ${js.userId}</h3><pre style="max-height:320px;overflow:auto">${JSON.stringify(stats,null,2)}</pre>`);
+        }catch(e){ console.warn(e); alert('Failed'); }
+      }
+
+      async function promoteUser(id){
+        const role = prompt('Enter role for user (e.g. admin)');
+        if(!role) return;
+        try{
+          const res = await fetch('/api/admin/users/' + encodeURIComponent(id) + '/role', { method:'POST', headers:{ 'Content-Type':'application/json', 'Authorization': 'Bearer ' + (localStorage.getItem('admin_token')||'') }, body: JSON.stringify({ role }) });
+          if(!res.ok){ const txt = await res.text(); alert('Failed: ' + txt); return; }
+          alert('Role updated'); refreshAll();
+        }catch(e){ console.warn(e); alert('Failed'); }
+      }
+
+      function viewGame(id){ showModal('<h3>Game</h3><pre>' + id + '</pre>'); }
+
+      function showModal(html){ const m = document.getElementById('modal'); const p = document.getElementById('modalPanel'); p.innerHTML = html + '<div style="text-align:right;margin-top:12px"><button class="btn" onclick="closeModal()">Close</button></div>'; m.classList.add('open'); }
+      function closeModal(){ document.getElementById('modal').classList.remove('open'); }
+
+      // initial load
+      loadAdminUser();
+      refreshAll();
+      setInterval(refreshAll, 5000);
     </script>
   </body>
 </html>

@@ -16,7 +16,15 @@ namespace PokemonQuizAPI.Controllers
         public string Image_Url { get; set; } = string.Empty;
         public string StatToGuess { get; set; } = string.Empty;
         public int CorrectValue { get; set; }
-        public List<StatOption> OtherValues { get; set; } = [];
+        public List<StatOption> OtherValues { get; set; } = new();
+    }
+
+    public class GameModeInfo
+    {
+        public string Id { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public bool Multiplayer { get; set; }
     }
 
     [ApiController]
@@ -25,6 +33,30 @@ namespace PokemonQuizAPI.Controllers
     {
         private readonly DatabaseHelper _db = db;
         private readonly ILogger<GameController> _logger = logger;
+
+        [HttpGet("modes")]
+        public IActionResult GetModes()
+        {
+            var modes = new List<GameModeInfo>
+            {
+                new GameModeInfo
+                {
+                    Id = "guess-stats",
+                    Name = "Guess Stats",
+                    Description = "Guess which stat value belongs to the Pokémon (multiplayer-ready).",
+                    Multiplayer = true
+                },
+                new GameModeInfo
+                {
+                    Id = "silhouette",
+                    Name = "Silhouette Guess",
+                    Description = "Guess the Pokémon from its silhouette (singleplayer or multiplayer).",
+                    Multiplayer = true
+                }
+            };
+
+            return Ok(modes);
+        }
 
         [HttpGet("random")]
         public async Task<IActionResult> GetRandomPokemon()
@@ -146,6 +178,52 @@ namespace PokemonQuizAPI.Controllers
             {
                 _logger.LogError(ex, "Error fetching all Pokémon");
                 return StatusCode(500, new { message = "Internal server error" });
+            }
+        }
+
+        public class SubmitResultRequest
+        {
+            public string? GameId { get; set; }
+            public int Score { get; set; }
+            public int TotalQuestions { get; set; }
+            public int CorrectAnswers { get; set; }
+        }
+
+        // POST /api/game/submit-result
+        [HttpPost("submit-result")]
+        public async Task<IActionResult> SubmitResult([FromBody] SubmitResultRequest req)
+        {
+            if (req == null) return BadRequest(new { message = "Missing payload" });
+
+            try
+            {
+                // Resolve user id from bearer token if present
+                var auth = Request.Headers["Authorization"].FirstOrDefault();
+                string? userId = null;
+                if (!string.IsNullOrWhiteSpace(auth) && auth.StartsWith("Bearer "))
+                {
+                    var token = auth.Substring("Bearer ".Length).Trim();
+                    userId = await _db.GetUserIdForTokenAsync(token);
+                }
+
+                // create a new GameSession record
+                var sessionId = Guid.NewGuid().ToString();
+                try
+                {
+                    await _db.CreateGameSessionAsync(sessionId, req.GameId, userId, null, req.Score, DateTime.UtcNow);
+                    await _db.EndGameSessionAsync(sessionId, DateTime.UtcNow);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to persist submitted result for user {UserId}", userId);
+                }
+
+                return Ok(new { sessionId, userId });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "SubmitResult failed");
+                return StatusCode(500, new { message = "Failed to submit result" });
             }
         }
     }

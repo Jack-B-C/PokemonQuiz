@@ -1,19 +1,13 @@
-﻿import React from "react";
-import { View, Text, StyleSheet, Alert } from "react-native";
+﻿import * as React from "react";
+import { View, Text, StyleSheet, Alert, Platform } from "react-native";
 import { colors } from "../../styles/colours";
-import Navbar from "@/components/Navbar";
-import AppButton from "@/components/AppButton";
+import AppButton from "../../components/AppButton";
 import { useRouter, useLocalSearchParams } from "expo-router";
-import { ensureConnection, getConnection } from '@/utils/signalrClient';
+import { ensureConnection, getConnection } from '../../utils/signalrClient';
 
 export default function GameOver() {
     const router = useRouter();
     const params = useLocalSearchParams();
-
-    // back handler to prevent going back into completed game
-    const handleBack = () => {
-        router.replace({ pathname: "/pages/ChooseGame" } as any);
-    };
 
     // Multiplayer support: roomCode, isHost, playerName may be present
     const roomCode = params.roomCode as string | undefined;
@@ -23,19 +17,8 @@ export default function GameOver() {
     // If leaderboard param provided (multiplayer), it will be a JSON string
     const leaderboardJson = params.leaderboard as string | undefined;
 
-    const handleHostReplay = async () => {
-        if (!roomCode) return;
-        try {
-            const serverIp = (global as any).navigator && (global as any).navigator.product === 'ReactNative' && (global as any).Platform?.OS === 'android' ? '10.0.2.2' : 'localhost';
-            const hubUrl = `http://${serverIp}:5168/hubs/game`;
-            const conn = await ensureConnection(hubUrl);
-            if (!conn) throw new Error('No connection');
-            await conn.invoke('StartGame', roomCode);
-        } catch (err: any) {
-            console.warn('Failed to replay as host', err);
-            Alert.alert('Error', 'Failed to start a new game: ' + (err?.message ?? String(err)));
-        }
-    };
+    // support optional returnTo param so pages can control where back goes
+    const returnTo = params.returnTo as string | undefined;
 
     if (leaderboardJson) {
         let leaderboard: { Name?: string; name?: string; Score?: number; score?: number }[] = [];
@@ -47,18 +30,30 @@ export default function GameOver() {
 
         return (
             <View style={styles.container}>
-                <Navbar title="Game Over" onBack={handleBack} />
                 <Text style={styles.title}>🏆 Lobby Leaderboard</Text>
                 <View style={{ width: '100%', paddingHorizontal: 20 }}>
                     {leaderboard.map((p, i) => (
-                        <Text key={i} style={styles.leaderText}>{i + 1}. {p.Name ?? p.name}: {p.Score ?? p.score}</Text>
+                        <React.Fragment key={i}>
+                            <Text style={styles.leaderText}>{i + 1}. {p.Name ?? p.name}: {p.Score ?? p.score}</Text>
+                        </React.Fragment>
                     ))}
                 </View>
 
                 {isHost && roomCode ? (
                     <AppButton
                         label="Play Again"
-                        onPress={handleHostReplay}
+                        onPress={async () => {
+                            try {
+                                const serverIp = Platform.OS === 'android' ? '10.0.2.2' : 'localhost';
+                                const hubUrl = `http://${serverIp}:5168/hubs/game`;
+                                const conn = await ensureConnection(hubUrl);
+                                if (!conn) throw new Error('No connection');
+                                await conn.invoke('StartGame', roomCode);
+                            } catch (err: any) {
+                                console.warn('Failed to replay as host', err);
+                                Alert.alert('Error', 'Failed to start a new game: ' + (err?.message ?? String(err)));
+                            }
+                        }}
                         backgroundColor={colors.primary}
                         style={styles.button}
                     />
@@ -76,19 +71,27 @@ export default function GameOver() {
 
     const score = Number(params.score ?? 0);
     const total = Number(params.total ?? 0);
+    const points = Number(params.points ?? 0);
     const accuracy = total > 0 ? Math.round((score / total) * 100) : 0;
 
+    // For singleplayer show a simpler screen
     return (
         <View style={styles.container}>
-            <Navbar title="Game Over" onBack={handleBack} />
             <Text style={styles.title}>🎮 Game Over!</Text>
             <Text style={styles.stats}>
                 You got {score}/{total} correct ({accuracy}%)
             </Text>
+            <Text style={styles.points}>
+                Points: {points}
+            </Text>
 
             <AppButton
                 label="Play Again"
-                onPress={() => router.replace({ pathname: "/pages/GuessStat" })}
+                onPress={() => {
+                    // navigate to returnTo (if provided) or default to HigherOrLowerSingle
+                    const target = returnTo ?? '/pages/HigherOrLowerSingle';
+                    try { router.replace({ pathname: target } as any); } catch { router.push(target as any); }
+                }}
                 backgroundColor={colors.primary}
                 style={styles.button}
             />
@@ -118,9 +121,14 @@ const styles = StyleSheet.create({
     },
     stats: {
         fontSize: 20,
-        marginBottom: 40,
+        marginBottom: 8,
         color: colors.text || "#fff",
         textAlign: "center",
+    },
+    points: {
+        fontSize: 18,
+        marginBottom: 24,
+        color: colors.text || "#fff",
     },
     button: {
         width: "80%",

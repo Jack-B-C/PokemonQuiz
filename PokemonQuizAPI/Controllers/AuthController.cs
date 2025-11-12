@@ -50,6 +50,62 @@ namespace PokemonQuizAPI.Controllers
             return Ok(new { token, userId });
         }
 
+        // New endpoint: return current user info based on Bearer token
+        [HttpGet("me")]
+        public async Task<IActionResult> Me()
+        {
+            try
+            {
+                var auth = Request.Headers["Authorization"].FirstOrDefault();
+                if (string.IsNullOrWhiteSpace(auth) || !auth.StartsWith("Bearer "))
+                    return Unauthorized(new { message = "Missing Authorization" });
+
+                var token = auth.Substring("Bearer ".Length).Trim();
+                var userId = await _db.GetUserIdForTokenAsync(token);
+                if (string.IsNullOrWhiteSpace(userId)) return Unauthorized(new { message = "Invalid token" });
+
+                var info = await _db.GetUserInfoByIdAsync(userId);
+
+                // Return role exactly as stored in DB (do not override with default here)
+                var role = info.Role;
+
+                // Ensure email is never null in response (frontend expects a string)
+                var email = info.Email ?? string.Empty;
+
+                return Ok(new { id = info.Id, username = info.Username, email, role });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Me endpoint failed");
+                return StatusCode(500, new { message = "Failed to retrieve user info" });
+            }
+        }
+
+        // New endpoint: return per-game stats for current user
+        [HttpGet("stats")]
+        public async Task<IActionResult> Stats()
+        {
+            try
+            {
+                var auth = Request.Headers["Authorization"].FirstOrDefault();
+                if (string.IsNullOrWhiteSpace(auth) || !auth.StartsWith("Bearer "))
+                    return Unauthorized(new { message = "Missing Authorization" });
+
+                var token = auth.Substring("Bearer ".Length).Trim();
+                var userId = await _db.GetUserIdForTokenAsync(token);
+                if (string.IsNullOrWhiteSpace(userId)) return Unauthorized(new { message = "Invalid token" });
+
+                _logger.LogInformation("Stats: resolving stats for user {UserId}", userId);
+                var stats = await _db.GetUserGameStatsAsync(userId);
+                return Ok(new { userId, stats });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Stats endpoint failed");
+                return StatusCode(500, new { message = "Failed to retrieve stats" });
+            }
+        }
+
         private static bool IsValidEmail(string? email)
         {
             if (string.IsNullOrWhiteSpace(email)) return false;

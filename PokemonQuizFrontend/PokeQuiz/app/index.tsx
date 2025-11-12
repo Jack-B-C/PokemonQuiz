@@ -1,14 +1,16 @@
-﻿import React, { useRef, useEffect } from "react";
-import { View, Text, StyleSheet, Animated, Dimensions, TouchableOpacity } from "react-native";
+﻿import React, { useRef, useEffect, useState } from "react";
+import { View, Text, StyleSheet, Animated, Dimensions, TouchableOpacity, ActivityIndicator, Platform } from "react-native";
 import { colors } from "../styles/colours";
 import Icon from "react-native-vector-icons/Ionicons";
 import { useRouter } from "expo-router";
+import { getToken } from '@/utils/tokenStorage';
 
 const { height: screenHeight } = Dimensions.get("window");
 
 export default function HomeScreen() {
     const router = useRouter();
     const pulseAnim = useRef(new Animated.Value(1)).current;
+    const [checking, setChecking] = useState(false);
 
     useEffect(() => {
         Animated.loop(
@@ -27,15 +29,34 @@ export default function HomeScreen() {
         ).start();
     }, [pulseAnim]);
 
+    // change navigation to use push instead of replace to avoid immediate back navigation
+    const goAccount = async () => {
+        // If token present in storage, go to Account. If not, open Login in Sign Up mode.
+        try {
+            setChecking(true);
+            const token = await getToken();
+            if (token && token.length > 0) {
+                (global as any).userToken = token;
+                router.push('/pages/Account');
+            } else {
+                router.push({ pathname: '/pages/Login', params: { signup: 'true' } } as any);
+            }
+        } catch (e) {
+            router.push({ pathname: '/pages/Login', params: { signup: 'true' } } as any);
+        } finally {
+            setChecking(false);
+        }
+    };
+
     return (
         <View style={styles.safeArea}>
             <View style={styles.container}>
                 <View style={styles.topHalf}>
-                    <Text style={styles.title}>PokéQuiz</Text>
+                    <Text style={styles.title}>PokeQuiz</Text>
                 </View>
 
                 <View style={styles.bottomHalf}>
-                    <Text style={styles.subtitle}>Test your Pokémon knowledge!</Text>
+                    <Text style={styles.subtitle}>Test your Pokemon knowledge!</Text>
                 </View>
 
                 <View style={styles.dividerLine} />
@@ -53,18 +74,12 @@ export default function HomeScreen() {
                 <TouchableOpacity
                     style={styles.loginButton}
                     activeOpacity={0.7}
-                    onPress={() => router.push("/pages/Login")}
+                    onPress={goAccount}
                 >
-                    <Icon name="person-circle-outline" size={40} color={colors.primary} />
+                    {checking ? <ActivityIndicator size={36} color={colors.primary} /> : <Icon name="person-circle-outline" size={40} color={colors.primary} />}
                 </TouchableOpacity>
 
-                <TouchableOpacity
-                    style={styles.leaderboardButton}
-                    activeOpacity={0.7}
-                    onPress={() => router.push("/pages/Mode")}
-                >
-                    <Icon name="bar-chart-outline" size={40} color={colors.white} />
-                </TouchableOpacity>
+                
             </View>
         </View>
     );

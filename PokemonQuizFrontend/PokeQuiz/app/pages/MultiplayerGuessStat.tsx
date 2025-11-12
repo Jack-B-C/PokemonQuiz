@@ -1,16 +1,6 @@
-import React, { useState, useEffect, useRef } from "react";
-import {
-    View,
-    Text,
-    StyleSheet,
-    Image,
-    Platform,
-    ActivityIndicator,
-    Modal,
-    ScrollView,
-    StyleProp,
-    ViewStyle,
-} from "react-native";
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, Image, Platform, ActivityIndicator, Modal, ScrollView, StyleProp, ViewStyle, TouchableOpacity, useWindowDimensions } from "react-native";
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from "../../styles/colours";
 import Navbar from "@/components/Navbar";
 import AppButton from "@/components/AppButton";
@@ -46,6 +36,9 @@ type Player = {
 };
 
 export default function MultiplayerPokemonGame() {
+    const { width: winW } = useWindowDimensions();
+    const dynamicImgSize = Math.min(220, Math.round(winW * 0.6));
+
     const [pokemonData, setPokemonData] = useState<PokemonGameData | null>(null);
     const [options, setOptions] = useState<StatOption[]>([]);
     const [selectedAnswer, setSelectedAnswer] = useState<number | null>(null);
@@ -60,6 +53,8 @@ export default function MultiplayerPokemonGame() {
     const [roundResults, setRoundResults] = useState<{ name: string; correct: boolean; answer: number | null }[] | null>(null);
     const [waitingForOthers, setWaitingForOthers] = useState(false);
     const questionReceivedRef = useRef<number>(0);
+    const showLeaderboardFallbackRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const allAnsweredReceivedRef = useRef<boolean>(false); // Track if AllAnswered was received this round
 
     const router = useRouter();
     const params = useLocalSearchParams();
@@ -95,9 +90,10 @@ export default function MultiplayerPokemonGame() {
         setupConnection();
         return () => {
             if (timerRef.current) clearInterval(timerRef.current);
+            if (showLeaderboardFallbackRef.current) { clearTimeout(showLeaderboardFallbackRef.current); showLeaderboardFallbackRef.current = null; }
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+    }, ['/' + roomCode, playerName]);
 
     const setupConnection = async () => {
         if (!roomCode || !playerName) return;
@@ -129,6 +125,14 @@ export default function MultiplayerPokemonGame() {
 
             connection.on("AllAnswered", (data: any) => {
                 console.debug('SignalR AllAnswered payload:', data);
+                
+                // Mark that we received AllAnswered - this prevents duplicate leaderboard shows
+                if (allAnsweredReceivedRef.current) {
+                    console.debug('AllAnswered already processed for this round, ignoring duplicate');
+                    return;
+                }
+                allAnsweredReceivedRef.current = true;
+                
                 if (data?.leaderboard) {
                     setPlayers(data.leaderboard.map((p: any) => ({ name: p.Name ?? p.name, score: p.Score ?? p.score })));
                 }
@@ -141,7 +145,15 @@ export default function MultiplayerPokemonGame() {
                     setRoundResults(results);
                 }
                 setWaitingForOthers(false);
-                setShowLeaderboard(true);
+                
+                // clear fallback if set
+                if (showLeaderboardFallbackRef.current) { 
+                    clearTimeout(showLeaderboardFallbackRef.current); 
+                    showLeaderboardFallbackRef.current = null; 
+                }
+                
+                // Add 1-second delay before showing leaderboard to let players see the results
+                setTimeout(() => setShowLeaderboard(true), 1000);
             });
 
             connection.on("RoomJoined", (data: any) => {
@@ -204,19 +216,70 @@ export default function MultiplayerPokemonGame() {
                     setShowResult(false);
                     setWaitingForOthers(false);
 
-                    // Rehydrate current question from server to ensure sync
-                    try {
+                    // Check if payload includes currentQuestion (new format from server)
+                    if (payload && typeof payload === 'object' && payload.currentQuestion) {
+                        console.debug('GameStarted included currentQuestion, using it directly');
+                        const startedAt = payload.questionStartedAt ? Date.parse(payload.questionStartedAt as string) : NaN;
+                        if (!isNaN(startedAt)) handleNewQuestion(payload.currentQuestion, startedAt);
+                        else handleNewQuestion(payload.currentQuestion);
+                    } else {
+                        // Fallback: if no question in payload (old-style string gameId), rehydrate via GetRoomInfo
+                        console.debug('GameStarted missing currentQuestion, rehydrating via GetRoomInfo');
+                        try {
+                            const info = await connection.invoke('GetRoomInfo', roomCode);
+                            if (info && info.currentQuestion) {
+                                const startedAt = info.questionStartedAt ? Date.parse(info.questionStartedAt as string) : NaN;
+                                if (!isNaN(startedAt)) handleNewQuestion(info.currentQuestion, startedAt);
+                                else handleNewQuestion(info.currentQuestion);
+                            }
+                        } catch (e) {
+                            console.warn('Failed to rehydrate room after GameStarted', e);
+                        }
+                    }
+
+                    // Navigate to correct multiplayer page based on payload (game id)
+                    const gameId = (payload && typeof payload === 'object') ? payload.gameId : payload;
+                    if (gameId === 'higher-or-lower' || gameId === 'compare-stat') {
+                        try { router.replace({ pathname: '/pages/MultiplayerHigherOrLower', params: { roomCode, playerName, isHost: isHost ? 'true' : 'false' } } as any); } catch { router.push({ pathname: '/pages/MultiplayerHigherOrLower', params: { roomCode, playerName } } as any); }
+                        return;
+                    }
+
+                } catch (e) {
+                    console.warn('Error handling GameStarted', e);
+                }
+            });
+            connection.on("gamestarted", async (payload: any) => {
+                console.debug('SignalR gamestarted payload:', payload);
+                try {
+                    setShowLeaderboard(false);
+                    setShowResult(false);
+                    setWaitingForOthers(false);
+
+                    // Check if payload includes currentQuestion (new format from server)
+                    if (payload && typeof payload === 'object' && payload.currentQuestion) {
+                        console.debug('gamestarted included currentQuestion, using it directly');
+                        const startedAt = payload.questionStartedAt ? Date.parse(payload.questionStartedAt as string) : NaN;
+                        if (!isNaN(startedAt)) handleNewQuestion(payload.currentQuestion, startedAt);
+                        else handleNewQuestion(payload.currentQuestion);
+                    } else {
+                        // Fallback: rehydrate via GetRoomInfo
+                        console.debug('gamestarted missing currentQuestion, rehydrating via GetRoomInfo');
                         const info = await connection.invoke('GetRoomInfo', roomCode);
                         if (info && info.currentQuestion) {
                             const startedAt = info.questionStartedAt ? Date.parse(info.questionStartedAt as string) : NaN;
                             if (!isNaN(startedAt)) handleNewQuestion(info.currentQuestion, startedAt);
                             else handleNewQuestion(info.currentQuestion);
                         }
-                    } catch (e) {
-                        console.warn('Failed to rehydrate room after GameStarted', e);
                     }
+
+                    const gameId = (payload && typeof payload === 'object') ? payload.gameId : payload;
+                    if (gameId === 'higher-or-lower' || gameId === 'compare-stat') {
+                        try { router.replace({ pathname: '/pages/MultiplayerHigherOrLower', params: { roomCode, playerName, isHost: isHost ? 'true' : 'false' } } as any); } catch { router.push({ pathname: '/pages/MultiplayerHigherOrLower', params: { roomCode, playerName } } as any); }
+                        return;
+                    }
+
                 } catch (e) {
-                    console.warn('Error handling GameStarted', e);
+                    console.warn('Error handling gamestarted', e);
                 }
             });
 
@@ -277,6 +340,7 @@ export default function MultiplayerPokemonGame() {
         setShowResult(false);
         setIsCorrect(false);
         setWaitingForOthers(false);
+        allAnsweredReceivedRef.current = false; // Reset for new round
 
         setOptions(shuffled.map(o => ({ stat: o.stat, value: Number(o.value) })));
         setPokemonData(normalized);
@@ -303,6 +367,7 @@ export default function MultiplayerPokemonGame() {
                         if (timerRef.current) clearInterval(timerRef.current);
                         if (currentSelected === null) {
                             submitAnswer(-1);
+                            // Don't show leaderboard here - wait for AllAnswered from server
                         }
                         return 0;
                     }
@@ -385,6 +450,16 @@ export default function MultiplayerPokemonGame() {
 
          try {
              await connectionRef.current.invoke("SubmitAnswer", roomCode, value, timeTaken);
+
+             // Failsafe: if AllAnswered doesn't arrive within 3 seconds, show leaderboard anyway
+             if (showLeaderboardFallbackRef.current) { clearTimeout(showLeaderboardFallbackRef.current); showLeaderboardFallbackRef.current = null; }
+             showLeaderboardFallbackRef.current = setTimeout(() => {
+                 if (!allAnsweredReceivedRef.current) {
+                     console.warn('AllAnswered not received, showing leaderboard as failsafe');
+                     setShowLeaderboard(true);
+                 }
+             }, 3000) as any;
+
          } catch (error) {
              console.error("Failed to submit:", error);
              // clear waiting state if submit failed
@@ -413,6 +488,7 @@ export default function MultiplayerPokemonGame() {
         setWaitingForOthers(false);
         selectedAnswerRef.current = null;
         setSelectedAnswer(null);
+        allAnsweredReceivedRef.current = false; // Reset for new round
 
         try {
             const maxAttempts = 3;
@@ -448,7 +524,7 @@ export default function MultiplayerPokemonGame() {
             // reset questionReceived timestamp before invoking
             questionReceivedRef.current = 0;
 
-            await connectionRef.current.invoke("SendQuestionToRoom", roomCode, data ?? {});
+            await connectionRef.current.invoke("SendQuestionToRoom", roomCode, data);
 
             // wait briefly for clients to receive Question via SignalR; if none received, rehydrate via GetRoomInfo
             setTimeout(async () => {
@@ -479,53 +555,7 @@ export default function MultiplayerPokemonGame() {
         }
      };
 
-    // Loading state before first question
-    if (!pokemonData && !showLeaderboard) {
-        return (
-            <View style={styles.container}>
-                <Navbar title="Multiplayer Quiz" onBack={handleBack} />
-                <View style={styles.content}>
-                    <ActivityIndicator size="large" color={colors.primary || "#3b82f6"} />
-                    <Text style={styles.loadingText}>
-                        {isHost ? "Waiting for you to start..." : "Waiting for host to start..."}
-                    </Text>
-                    {isHost && (
-                        <AppButton label="Start Game" onPress={sendNextQuestion} style={{ marginTop: 20 }} />
-                    )}
-                </View>
-            </View>
-        );
-    }
-
-    // sort players for leaderboard display
-    const sortedPlayers = [...players].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
-
-    // Host Play Again helper
-    const handleHostPlayAgain = async () => {
-        const conn = getConnection();
-        // proactively close leaderboard for host to avoid stale modal
-        setShowLeaderboard(false);
-        setShowResult(false);
-        setWaitingForOthers(false);
-
-        if (!conn) {
-            try {
-                const connection = await ensureConnection(`http://${serverIp}:5168/hubs/game`);
-                await connection.invoke('StartGame', roomCode);
-            } catch (e) {
-                console.warn('PlayAgain failed', e);
-            }
-            return;
-        }
-
-        try {
-            await conn.invoke('StartGame', roomCode);
-        } catch (e) {
-            console.warn('PlayAgain invoke failed', e);
-        }
-    };
-
-    // Leave or disband
+    // Leave or disband - placed inside component so it can access roomCode and router
     const handleLeaveOrDisband = async (disband: boolean) => {
         const conn = getConnection();
         try {
@@ -543,65 +573,92 @@ export default function MultiplayerPokemonGame() {
         try { router.replace('/pages/ChooseGame'); } catch { router.push('/'); }
     };
 
+    // Loading state before first question
+    if (!pokemonData && !showLeaderboard) {
+        return (
+            <View style={styles.container}>
+                <Navbar title="Multiplayer Quiz" onBack={handleBack} backTo={'/pages/ChooseGame'} />
+                <View style={styles.mainContent}>
+                    <ActivityIndicator size="large" color={colors.primary || "#3b82f6"} />
+                    <Text style={styles.loadingText}>
+                        {isHost ? "Waiting for you to start..." : "Waiting for host to start..."}
+                    </Text>
+                    {isHost && (
+                        <AppButton label="Start Game" onPress={sendNextQuestion} style={{ marginTop: 20 }} />
+                    )}
+                </View>
+            </View>
+        );
+    }
+
+    // sort players for leaderboard display
+    const sortedPlayers = [...players].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+
     return (
-        <View style={styles.container}>
+        <SafeAreaView style={styles.container}>
             <Navbar title="Multiplayer Quiz" onBack={handleBack} />
+            <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
             <View style={styles.header}>
-                <Text style={styles.roundText}>
+                <Text style={styles.roundText} accessibilityRole="header">
                     Round {currentRound} / {MAX_ROUNDS}
                 </Text>
                 <View style={[styles.timerContainer, timer <= 5 && styles.timerUrgent]}>
                     <Text style={styles.timerText}>⏱️ {timer} s</Text>
                 </View>
             </View>
-            {pokemonData && !showLeaderboard && (
-                <View style={styles.content}>
-                    <Text style={styles.title}>
-                        What is {pokemonData.pokemonName}'s{"\n"}
-                        {pokemonData.statToGuess}?
-                    </Text>
-                    <Image source={{ uri: pokemonData.image_Url }} style={styles.pokemonImage} resizeMode="contain" />
-                    {showResult && (
-                        <View style={[styles.resultBanner, isCorrect ? styles.correctBanner : styles.incorrectBanner]}>
-                            <Text style={styles.resultEmoji}>{isCorrect ? "🎉" : "❌"}</Text>
-                            <View>
-                                <Text style={styles.resultText}>
-                                    {isCorrect ? "Correct!" : `Wrong! It's ${pokemonData.correctValue}`}
-                                </Text>
-                                {isCorrect && <Text style={styles.pointsText}>+{pointsEarned} points</Text>}
+
+            <View style={styles.mainContent}>
+                {pokemonData && !showLeaderboard && (
+                    <View style={styles.contentInner}>
+                        <Text style={styles.title} accessibilityRole="header" numberOfLines={3}>
+                            What is {pokemonData.pokemonName}'s{"\n"}
+                            {pokemonData.statToGuess}?
+                        </Text>
+                        <Image source={{ uri: pokemonData.image_Url }} style={[styles.pokemonImage, { width: dynamicImgSize, height: dynamicImgSize }]} resizeMode="contain" />
+                        {showResult && (
+                            <View style={[styles.resultBanner, isCorrect ? styles.correctBanner : styles.incorrectBanner]}>
+                                <Text style={styles.resultEmoji}>{isCorrect ? "🎉" : "❌"}</Text>
+                                <View>
+                                    <Text style={styles.resultText} numberOfLines={2}>
+                                        {isCorrect ? "Correct!" : `Wrong! It's ${pokemonData.correctValue}`}
+                                    </Text>
+                                    {isCorrect && <Text style={styles.pointsText}>+{pointsEarned} points</Text>}
+                                </View>
                             </View>
+                        )}
+                        <View style={styles.optionsContainer}>
+                            {options.map((item, index) => {
+                                const isSelected = selectedAnswer === item.value;
+                                const isCorrectOption = item.value === pokemonData!.correctValue;
+                                const showCorrect = showResult && isCorrectOption;
+                                const showIncorrect = showResult && isSelected && !isCorrect;
+                                const btnStyles: Array<StyleProp<ViewStyle>> = [styles.optionButton];
+                                if (showCorrect) btnStyles.push(styles.correctButton);
+                                if (showIncorrect) btnStyles.push(styles.incorrectButton);
+                                return (
+                                    <AppButton
+                                        key={`${item.value}-${index}`}
+                                        label={`${item.value}`}
+                                        onPress={() => submitAnswer(item.value)}
+                                        style={btnStyles as any}
+                                        disabled={selectedAnswer !== null || timer === 0}
+                                    />
+                                );
+                            })}
                         </View>
-                    )}
-                    <View style={styles.optionsContainer}>
-                        {options.map((item, index) => {
-                            const isSelected = selectedAnswer === item.value;
-                            const isCorrectOption = item.value === pokemonData!.correctValue;
-                            const showCorrect = showResult && isCorrectOption;
-                            const showIncorrect = showResult && isSelected && !isCorrect;
-                            const btnStyles: Array<StyleProp<ViewStyle>> = [styles.optionButton];
-                            if (showCorrect) btnStyles.push(styles.correctButton);
-                            if (showIncorrect) btnStyles.push(styles.incorrectButton);
-                            return (
-                                <AppButton
-                                    key={`${item.value}-${index}`}
-                                    label={`${item.value}`}
-                                    onPress={() => submitAnswer(item.value)}
-                                    style={btnStyles as any}
-                                    disabled={selectedAnswer !== null || timer === 0}
-                                />
-                            );
-                        })}
+                        <View style={styles.playersContainer}>
+                            <Text style={styles.playersTitle}>Players:</Text>
+                            {players.map((player, i) => (
+                                <Text key={i} style={styles.playerText} accessibilityLabel={`${player.name} ${player.answered ? 'answered' : 'waiting'}`}>
+                                    {player.answered ? "✓" : "⏳"} {player.name}
+                                </Text>
+                            ))}
+                        </View>
                     </View>
-                    <View style={styles.playersContainer}>
-                        <Text style={styles.playersTitle}>Players:</Text>
-                        {players.map((player, i) => (
-                            <Text key={i} style={styles.playerText}>
-                                {player.answered ? "✓" : "⏳"} {player.name}
-                            </Text>
-                        ))}
-                    </View>
-                </View>
-            )}
+                )}
+            </View>
+            </ScrollView>
+
             <Modal visible={showLeaderboard} transparent animationType="slide">
                 <View style={styles.modalOverlay}>
                     <View style={styles.modalContent}>
@@ -632,230 +689,93 @@ export default function MultiplayerPokemonGame() {
                             ))}
                         </ScrollView>
 
-                        <View style={{ marginTop: 8 }} />
-
-                        {isHost ? (
-                            <AppButton
-                                label={currentRound >= MAX_ROUNDS ? "End Game" : "Next Question"}
-                                onPress={sendNextQuestion}
-                                style={styles.nextButton}
-                            />
-                        ) : (
-                            <Text style={styles.waitingText}>Waiting for host...</Text>
-                        )}
-
-                        {/* Small action row for replay and leave */}
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 12, marginTop: 12 }}>
-                            {isHost && (
-                                <AppButton label="Play Again" onPress={handleHostPlayAgain} style={{ flex: 1 }} />
+                        <View style={{ marginTop: 20, alignItems: 'center' }}>
+                            {isHost && currentRound < MAX_ROUNDS ? (
+                                <AppButton
+                                    label="Next Question"
+                                    onPress={() => { setShowLeaderboard(false); sendNextQuestion(); }}
+                                    style={{ width: '80%', marginBottom: 12 }}
+                                />
+                            ) : (
+                                <Text style={{ color: colors.text, textAlign: 'center', marginVertical: 12 }}>
+                                    {isHost ? 'Game Complete!' : 'Waiting for host...'}
+                                </Text>
                             )}
-                            <AppButton label="Back to Lobby" onPress={() => { try { router.replace({ pathname: '/pages/WaitingRoom', params: { roomCode, playerName } } as any); } catch { router.push('/pages/WaitingRoom'); } }} style={{ flex: 1 }} />
-                            <AppButton label="Leave" onPress={() => handleLeaveOrDisband(false)} style={{ flex: 1, backgroundColor: '#ef4444' }} />
+                            <TouchableOpacity style={{ marginTop: 8 }} onPress={() => handleLeaveOrDisband(false)}>
+                                <Text style={{ color: colors.error, textAlign: 'center', fontWeight: '700' }}>
+                                    Leave Room
+                                </Text>
+                            </TouchableOpacity>
                         </View>
-
                     </View>
                 </View>
             </Modal>
-        </View>
+        </SafeAreaView>
     );
 }
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: colors.background || "#151515",
-    },
-    content: {
-        flex: 1,
-        justifyContent: "center",
-        alignItems: "center",
-        padding: 20,
-    },
-    header: {
-        flexDirection: "row",
-        justifyContent: "space-between",
-        alignItems: "center",
-        padding: 16,
-        backgroundColor: colors.primary || "#3b82f6",
-    },
-    roundText: {
-        fontSize: 18,
-        fontWeight: "700",
-        color: "#fff",
-    },
-    timerContainer: {
-        backgroundColor: "#10b981",
-        paddingHorizontal: 16,
-        paddingVertical: 8,
-        borderRadius: 20,
-    },
-    timerUrgent: {
-        backgroundColor: "#ef4444",
-    },
-    timerText: {
-        fontSize: 18,
-        fontWeight: "700",
-        color: "#fff",
-    },
-    title: {
-        fontSize: 24,
-        fontWeight: "700",
-        marginBottom: 20,
-        textAlign: "center",
-        color: colors.text || "#fff",
-    },
-    pokemonImage: {
-        width: 200,
-        height: 200,
-        marginBottom: 20,
-    },
-    resultBanner: {
-        flexDirection: "row",
-        alignItems: "center",
-        padding: 16,
-        borderRadius: 12,
-        marginBottom: 20,
-        minWidth: "80%",
-    },
-    correctBanner: {
-        backgroundColor: "#10b981",
-    },
-    incorrectBanner: {
-        backgroundColor: "#ef4444",
-    },
-    resultEmoji: {
-        fontSize: 32,
-        marginRight: 12,
-    },
-    resultText: {
-        fontSize: 20,
-        fontWeight: "700",
-        color: "#fff",
-    },
-    pointsText: {
-        fontSize: 16,
-        color: "#fff",
-        marginTop: 4,
-    },
-    optionsContainer: {
-        width: "100%",
-        maxWidth: 400,
-        gap: 12,
-    },
-    optionButton: {
-        width: "100%",
-        paddingVertical: 16,
-    },
-    correctButton: {
-        backgroundColor: "#10b981",
-    },
-    incorrectButton: {
-        backgroundColor: "#ef4444",
-    },
-    playersContainer: {
-        marginTop: 20,
-        padding: 16,
-        backgroundColor: colors.surface || "#1f2937",
-        borderRadius: 12,
-        width: "100%",
-        maxWidth: 400,
-    },
-    playersTitle: {
-        fontSize: 16,
-        fontWeight: "700",
-        marginBottom: 8,
-        color: colors.text || "#fff",
-    },
-    playerText: {
-        fontSize: 14,
-        color: colors.text || "#fff",
-        marginVertical: 4,
-    },
-    loadingText: {
-        marginTop: 16,
-        fontSize: 16,
-        color: colors.text || "#fff",
-        textAlign: "center",
-    },
-    modalOverlay: {
-        flex: 1,
-        justifyContent: "center",
-        alignItems: "center",
-        backgroundColor: "rgba(0,0,0,0.8)",
-    },
-    modalContent: {
-        width: "90%",
-        maxHeight: "80%",
-        backgroundColor: colors.surface || "#1f2937",
-        borderRadius: 16,
-        padding: 24,
-        // web-friendly box shadow and Android elevation
-        elevation: 8,
-    },
-    modalTitle: {
-        fontSize: 28,
-        fontWeight: "700",
-        textAlign: "center",
-        marginBottom: 20,
-        color: colors.text || "#fff",
-    },
-    leaderboardScroll: {
-        maxHeight: 400,
-        marginBottom: 20,
-    },
-    leaderboardRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        paddingVertical: 12,
-        paddingHorizontal: 16,
-        backgroundColor: colors.surface || '#111827',
-        borderRadius: 8,
-        marginBottom: 8,
-    },
-    topPlayerRow: {
-        backgroundColor: '#0b1220',
-        borderWidth: 1,
-        borderColor: colors.primary || '#3b82f6',
-    },
-    leaderboardRank: {
-        fontSize: 18,
-        fontWeight: '700',
-        color: colors.primary || '#3b82f6',
-        width: 48,
-        textAlign: 'center',
-    },
-    leaderboardName: {
-        fontSize: 18,
-        fontWeight: '600',
-        flex: 1,
-        color: colors.text || '#fff',
-    },
-    topPlayerName: {
-        color: '#fff',
-        fontSize: 20,
-    },
-    scorePill: {
-        backgroundColor: '#111827',
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        borderRadius: 20,
-    },
-    leaderboardScore: {
-        fontSize: 16,
-        fontWeight: '700',
-        color: colors.accent || '#fbbf24',
-    },
-    leaderboardRowSmall: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        paddingVertical: 8,
-        paddingHorizontal: 6,
-        marginBottom: 6,
-    },
-    leaderboardNameSmall: { color: colors.text || '#fff' },
-    correctText: { color: '#10b981' },
-    incorrectText: { color: '#ef4444' },
-    nextButton: { width: '100%' },
-    waitingText: { textAlign: 'center', fontSize: 16, color: colors.muted || '#9ca3af' },
+    container: { flex: 1, backgroundColor: colors.background },
+    mainContent: { flex: 1, justifyContent: "center", alignItems: "center", padding: 20 },
+    loadingText: { marginTop: 12, fontSize: 16, color: colors.text },
+    header: { padding: 16, backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.grey },
+    roundText: { fontSize: 18, fontWeight: "800", color: colors.text, marginBottom: 8, textAlign: "center" },
+    timerContainer: { backgroundColor: colors.primaryLight, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, alignSelf: "center", marginTop: 8 },
+    timerUrgent: { backgroundColor: colors.error },
+    timerText: { fontSize: 16, fontWeight: "700", color: colors.text },
+    questionText: { fontSize: 18, fontWeight: "800", color: colors.text, marginBottom: 8, textAlign: "center" },
+    statsRow: { flexDirection: "row", justifyContent: "space-around", marginTop: 8 },
+    statChip: { backgroundColor: colors.primaryLight, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16 },
+    statText: { fontSize: 14, fontWeight: "700", color: colors.text },
+    content: { flex: 1, padding: 20 },
+    contentInner: { width: "100%", alignItems: "center" },
+    pokemonCard: { alignItems: "center", marginBottom: 20 },
+    title: { fontSize: 22, fontWeight: "900", color: colors.text, marginBottom: 12, textAlign: "center" },
+    pokemonName: { fontSize: 24, fontWeight: "900", color: colors.text, marginBottom: 12 },
+    pokemonImage: { width: 200, height: 200, marginBottom: 20 },
+    image: { width: 200, height: 200, marginBottom: 20 },
+    resultBanner: { flexDirection: "row", alignItems: "center", padding: 12, borderRadius: 8, marginBottom: 16 },
+    correctBanner: { backgroundColor: "#10b98133" },
+    incorrectBanner: { backgroundColor: "#ef444433" },
+    resultEmoji: { fontSize: 32, marginRight: 12 },
+    pointsText: { fontSize: 14, fontWeight: "700", color: colors.primary, marginTop: 4 },
+    optionsContainer: { width: "100%", marginBottom: 20 },
+    optionButton: { width: "100%", padding: 15, marginVertical: 5, borderRadius: 10, elevation: 2 },
+    optionButtonText: { fontSize: 18, fontWeight: "600", color: colors.text, textAlign: "center" },
+    selectedOption: { borderWidth: 3, borderColor: colors.primary },
+    correctButton: { backgroundColor: "#10b981" },
+    incorrectButton: { backgroundColor: "#ef4444" },
+    correctOption: { backgroundColor: "#10b981" },
+    incorrectOption: { backgroundColor: "#ef4444" },
+    resultText: { fontSize: 18, fontWeight: "700", marginTop: 10, textAlign: "center", color: colors.text },
+    playersContainer: { marginTop: 20, width: "100%", padding: 12, backgroundColor: colors.surface, borderRadius: 8 },
+    playersTitle: { fontSize: 16, fontWeight: "700", color: colors.text, marginBottom: 8 },
+    playerText: { fontSize: 14, color: colors.text, paddingVertical: 4 },
+    playersHeader: { fontSize: 16, fontWeight: "700", color: colors.text, marginTop: 20, marginBottom: 8 },
+    playersList: { maxHeight: 120 },
+    playerRow: { flexDirection: "row", justifyContent: "space-between", paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: colors.grey },
+    playerName: { fontSize: 14, color: colors.text, flex: 1 },
+    playerScore: { fontSize: 14, fontWeight: "700", color: colors.primary },
+    modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "center", alignItems: "center" },
+    modalContent: { width: "90%", maxHeight: "80%", backgroundColor: colors.surface, borderRadius: 16, padding: 20 },
+    modalCard: { width: "90%", maxHeight: "80%", backgroundColor: colors.surface, borderRadius: 16, padding: 20 },
+    modalTitle: { fontSize: 24, fontWeight: "900", color: colors.text, marginBottom: 12, textAlign: "center" },
+    leaderboardScroll: { maxHeight: 300, marginVertical: 12 },
+    leaderboardRow: { flexDirection: "row", alignItems: "center", paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.grey },
+    topPlayerRow: { backgroundColor: colors.primaryLight, borderRadius: 8, paddingHorizontal: 8 },
+    leaderboardRank: { fontSize: 18, fontWeight: "800", color: colors.text, width: 40 },
+    leaderboardName: { flex: 1, fontSize: 16, fontWeight: "600", color: colors.text },
+    topPlayerName: { fontWeight: "900" },
+    scorePill: { backgroundColor: colors.primary, paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 },
+    leaderboardScore: { fontSize: 16, fontWeight: "800", color: colors.white },
+    roundResultsContainer: { marginBottom: 16 },
+    roundResultRow: { flexDirection: "row", justifyContent: "space-between", paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: colors.grey },
+    roundResultName: { fontSize: 14, color: colors.text, flex: 1 },
+    roundResultStatus: { fontSize: 14, fontWeight: "700" },
+    correctStatus: { color: "#10b981" },
+    incorrectStatus: { color: "#ef4444" },
+    leaderboardRowSmall: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6, marginBottom: 4 },
+    leaderboardNameSmall: { fontSize: 14, color: colors.text, flex: 1 },
+    correctText: { color: '#10b981', fontWeight: '700' },
+    incorrectText: { color: '#ef4444', fontWeight: '700' }
 });

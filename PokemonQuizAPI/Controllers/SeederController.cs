@@ -9,17 +9,18 @@ namespace PokemonQuizAPI.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
-    public class SeedController : ControllerBase
+    public partial class SeedController : ControllerBase
     {
         private readonly DatabaseHelper _db;
         private readonly ILogger<SeedController> _logger;
-        private readonly HttpClient _httpClient = new();
+        private readonly HttpClient _httpClient;
         private readonly IHubContext<GameHub> _hubContext;
 
         public SeedController(DatabaseHelper db, ILogger<SeedController> logger, IHubContext<GameHub> hubContext)
         {
             _db = db;
             _logger = logger;
+            _httpClient = new HttpClient();
             _hubContext = hubContext;
         }
 
@@ -182,6 +183,16 @@ namespace PokemonQuizAPI.Controllers
         [HttpDelete("pokemon")]
         public async Task<IActionResult> ClearPokemon()
         {
+            // require a session token in Authorization header
+            var auth = Request.Headers["Authorization"].FirstOrDefault();
+            if (string.IsNullOrWhiteSpace(auth) || !auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+                return Unauthorized(new { message = "Missing or invalid Authorization header" });
+
+            var token = auth.Substring("Bearer ".Length).Trim();
+            var userId = await _db.GetUserIdForTokenAsync(token);
+            if (string.IsNullOrWhiteSpace(userId))
+                return Unauthorized(new { message = "Invalid token" });
+
             try
             {
                 var cleared = await _db.ClearAllPokemonAsync();
