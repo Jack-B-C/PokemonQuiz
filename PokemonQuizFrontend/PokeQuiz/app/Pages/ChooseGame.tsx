@@ -6,6 +6,19 @@ import Navbar from '../../components/Navbar';
 import { getConnection, ensureConnection } from '../../utils/signalrClient';
 import * as SignalR from '@microsoft/signalr';
 
+// -----------------------------------------------------------------------------
+// ChooseGame
+//
+// Purpose:
+// - Present available game modes to the user (single-player or multiplayer flows).
+// - For multiplayer rooms, notify the server of the selected game and navigate
+//   hosts/clients into the appropriate waiting/host screens.
+//
+// Note: The "Higher or Lower" multiplayer mode has been temporarily disabled
+// in the application. The file implementing that mode remains in the repo for
+// future reactivation, but the UI will not surface it to users.
+// -----------------------------------------------------------------------------
+
 const { width, height } = Dimensions.get('window');
 
 export default function ChooseGame() {
@@ -27,9 +40,13 @@ export default function ChooseGame() {
 
     const topOffset = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) : 0;
 
+    // Games list: keep this array minimal. Removed the multiplayer "Higher or Lower"
+    // entry so it is not accessible from the UI. If reactivating later, add the
+    // entry back here and ensure backend/hub support is present.
     const games = [
         { id: 'guess-stats', name: 'Guess the Stats', image: require('../../assets/images/charizard.png'), page:'/pages/GuessStat' },
-        { id: 'higher-or-lower', name: 'Higher or Lower', image: require('../../assets/images/charizard.png'), page: '/pages/HigherOrLowerSingle' }
+        // Disabled entry (kept here as a reference):
+        // { id: 'higher-or-lower', name: 'Higher or Lower', image: require('../../assets/images/charizard.png'), page: '/pages/HigherOrLowerSingle' }
     ];
 
     const handleGameSelect = async (gameId: string) => {

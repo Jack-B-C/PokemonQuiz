@@ -8,6 +8,21 @@ import { ensureConnection, getConnection } from '../../utils/signalrClient';
 import * as SignalR from '@microsoft/signalr';
 import { colors } from '../../styles/colours';
 
+// -----------------------------------------------------------------------------
+// MultiplayerHigherOrLower
+//
+// Purpose:
+// - Multiplayer implementation for the "Higher or Lower" compare-stat game.
+// - This file remains in the repository to preserve multiplayer logic and to
+//   simplify future reactivation. The screen is temporarily disabled from the
+//   app-level navigation to prevent users from accessing this experimental
+//   game mode in production builds.
+//
+// Behavior while disabled:
+// - If navigated to directly (e.g. deep link), the page will show a clear
+//   "temporarily unavailable" message and provide a safe back action.
+// ----------------------------------------------------------------------------/
+
 let Audio: any = null;
 try {
   Audio = require('expo-av').Audio;
@@ -47,6 +62,27 @@ type Player = { name: string; score: number; answered?: boolean; };
 export default function MultiplayerHigherOrLower() {
   const router = useRouter();
   const params = useLocalSearchParams();
+
+  // If this page is reached by direct navigation, show a clear disabled UI
+  // message. The page remains available in source control for future use.
+  const [disabledMessageShown] = useState(true);
+  if (disabledMessageShown) {
+    const topOffset = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) : 0;
+    return (
+      <SafeAreaView style={[styles.container, { paddingTop: topOffset }]}> 
+        <Navbar title={"Multiplayer - Temporarily Unavailable"} onBack={() => { try{ router.replace('/pages/ChooseGame'); } catch { router.push('/pages/ChooseGame'); } }} />
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+          <Text style={{ fontSize: 24, fontWeight: '800', textAlign: 'center', marginBottom: 12, color: colors.text }}>This multiplayer mode is temporarily unavailable.</Text>
+          <Text style={{ textAlign: 'center', color: colors.muted }}>We're preserving the multiplayer implementation in the codebase for future testing and reactivation. Please select another game for now.</Text>
+          <View style={{ marginTop: 18, width: '60%' }}>
+            <AppButton label='Back to Games' onPress={() => { try{ router.replace('/pages/ChooseGame'); } catch { router.push('/pages/ChooseGame'); } }} />
+          </View>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // Full implementation retained below for future activation.
   const roomCode = params.roomCode as string;
   const playerName = params.playerName as string;
   const isHost = String(params.isHost ?? '') === 'true';

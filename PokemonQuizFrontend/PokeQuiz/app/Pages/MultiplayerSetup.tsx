@@ -5,6 +5,14 @@ import Navbar from "@/components/Navbar";
 import AppButton from "@/components/AppButton";
 import { useRouter } from "expo-router";
 
+// -----------------------------------------------------------------------------
+// MultiplayerSetup
+//
+// Purpose:
+// - Allow users to join an existing multiplayer room by code or host a new room.
+// - Performs basic validation against the backend to ensure room is active.
+// -----------------------------------------------------------------------------
+
 export default function MultiplayerSetup() {
     const router = useRouter();
     const [roomCode, setRoomCode] = useState("");
@@ -35,6 +43,7 @@ export default function MultiplayerSetup() {
                 params: { roomCode: roomCode.toUpperCase() },
             });
         } catch (err) {
+            // Log and surface a friendly message to the user
             console.error(err);
             setError("Error validating room code");
         }

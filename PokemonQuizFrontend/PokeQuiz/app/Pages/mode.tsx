@@ -15,6 +15,19 @@ import { colors } from '../../styles/colours';
 import Navbar from '../../components/Navbar';
 import { router } from 'expo-router';
 
+// -----------------------------------------------------------------------------
+// Mode Screen
+//
+// Purpose:
+// - Entry point for selecting single-player vs multiplayer flows.
+// - Provides polished visuals and accessible controls for mode selection.
+//
+// Notes:
+// - Multiplayer flow navigates to the multiplayer setup screens. Certain
+//   multiplayer game pages may be temporarily disabled in the UI while they
+//   remain in the codebase for future reactivation.
+// -----------------------------------------------------------------------------
+
 export const options = { headerShown: false } as const;
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
