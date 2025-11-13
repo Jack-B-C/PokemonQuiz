@@ -8,8 +8,13 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.Extensions.FileProviders;
 using System.IO;
+using Microsoft.AspNetCore.HttpOverrides;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// If running inside Docker/Plesk, bind to all network interfaces on port 80 by default
+// This can still be overridden by environment variables (ASPNETCORE_URLS) if needed
+builder.WebHost.UseUrls("http://0.0.0.0:80");
 
 // Load configuration from appsettings.json and environment-specific JSON file
 builder.Configuration
@@ -26,7 +31,7 @@ builder.Services.AddScoped<IPokemonRepository, PokemonRepository>();
 builder.Services.AddControllersWithViews();
 builder.Services.AddLogging();
 
-// Add SignalR — enable Redis backplane only when a Redis connection string exists
+// Add SignalR – enable Redis backplane only when a Redis connection string exists
 var signalRBuilder = builder.Services.AddSignalR();
 var redisConn = builder.Configuration.GetConnectionString("Redis");
 if (!string.IsNullOrWhiteSpace(redisConn))
@@ -40,12 +45,21 @@ if (!string.IsNullOrWhiteSpace(redisConn))
     #pragma warning restore CS0618
 }
 
-// Add CORS policy to allow local frontend during development
+// Configure CORS - allow origins from configuration or fall back to local dev hosts
+var allowedOriginsSetting = builder.Configuration["AllowedOrigins"];
+if (string.IsNullOrWhiteSpace(allowedOriginsSetting))
+{
+    // default development origins
+    allowedOriginsSetting = "http://localhost:8081;http://localhost:19006;http://localhost:19000;http://localhost:5168";
+}
+var allowedOrigins = allowedOriginsSetting.Split(';', System.StringSplitOptions.RemoveEmptyEntries);
+
+// Add CORS policy
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("LocalDev", policy =>
     {
-        policy.WithOrigins("http://localhost:8081", "http://localhost:19006", "http://localhost:19000", "http://localhost:5168")
+        policy.WithOrigins(allowedOrigins)
               .AllowAnyHeader()
               .AllowAnyMethod()
               .AllowCredentials();
@@ -54,6 +68,16 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 var logger = app.Services.GetRequiredService<ILogger<Program>>();
+
+// Use forwarded headers so reverse proxies (Plesk/nginx) forwarding X-Forwarded-* are respected
+var forwardedOptions = new ForwardedHeadersOptions
+{
+    ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
+};
+// It's common in container environments to clear known networks/proxies so forwarded headers are accepted
+forwardedOptions.KnownNetworks.Clear();
+forwardedOptions.KnownProxies.Clear();
+app.UseForwardedHeaders(forwardedOptions);
 
 // Ensure DB is initialized (runs schema.sql when using MySQL)
 try
@@ -204,6 +228,9 @@ else
         await context.Response.WriteAsync(fallbackHtml);
     });
 }
+
+// Enable WebSockets (helpful behind proxies that pass through websocket upgrades)
+app.UseWebSockets();
 
 // Map SignalR hub for multiplayer
 app.MapHub<GameHub>("/hubs/game");
