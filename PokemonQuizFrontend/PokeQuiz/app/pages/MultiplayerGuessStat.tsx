@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, Image, Platform, ActivityIndicator, Modal, ScrollView, StyleProp, ViewStyle, TouchableOpacity, useWindowDimensions } from "react-native";
+import { View, Text, StyleSheet, Image, Platform, ActivityIndicator, Modal, ScrollView, StyleProp, ViewStyle, TouchableOpacity, useWindowDimensions, Alert } from "react-native";
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from "../../styles/colours";
 import Navbar from "@/components/Navbar";
@@ -100,6 +100,12 @@ export default function MultiplayerPokemonGame() {
         const hubUrl = `http://${serverIp}:5168/hubs/game`;
         try {
             const connection = await ensureConnection(hubUrl);
+            if (!connection) {
+                console.error('Failed to establish SignalR connection in MultiplayerGuessStat');
+                Alert.alert('Connection Error', 'Failed to connect to multiplayer server');
+                try { router.back(); } catch { }
+                return;
+            }
             connectionRef.current = connection;
 
             // detach handlers to avoid duplicates

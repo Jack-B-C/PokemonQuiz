@@ -1,9 +1,9 @@
 import * as React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Image, Platform, Alert, Dimensions, StatusBar, ScrollView } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { colors } from '../../styles/colours';
-import Navbar from '../../components/Navbar';
-import { getConnection, ensureConnection } from '../../utils/signalrClient';
+import { colors } from '../../styles/colours.js';
+import Navbar from '../../components/Navbar.js';
+import { getConnection, ensureConnection } from '../../utils/signalrClient.js';
 import * as SignalR from '@microsoft/signalr';
 
 // -----------------------------------------------------------------------------
@@ -13,10 +13,6 @@ import * as SignalR from '@microsoft/signalr';
 // - Present available game modes to the user (single-player or multiplayer flows).
 // - For multiplayer rooms, notify the server of the selected game and navigate
 //   hosts/clients into the appropriate waiting/host screens.
-//
-// Note: The "Higher or Lower" multiplayer mode has been temporarily disabled
-// in the application. The file implementing that mode remains in the repo for
-// future reactivation, but the UI will not surface it to users.
 // -----------------------------------------------------------------------------
 
 const { width, height } = Dimensions.get('window');
@@ -40,14 +36,21 @@ export default function ChooseGame() {
 
     const topOffset = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) : 0;
 
-    // Games list: keep this array minimal. Removed the multiplayer "Higher or Lower"
-    // entry so it is not accessible from the UI. If reactivating later, add the
-    // entry back here and ensure backend/hub support is present.
+    // Games list: define which modes each game should appear in
     const games = [
-        { id: 'guess-stats', name: 'Guess the Stats', image: require('../../assets/images/charizard.png'), page:'/pages/GuessStat' },
-        // Disabled entry (kept here as a reference):
-        // { id: 'higher-or-lower', name: 'Higher or Lower', image: require('../../assets/images/charizard.png'), page: '/pages/HigherOrLowerSingle' }
+        // Single-player: GuessStat
+        { id: 'guess-stats', name: 'Guess the Stats', image: require('../../assets/images/charizard.png'), page: '/pages/GuessStat', showInModes: ['single'] },
+        // Single-player: Higher or Lower (single player variant)
+        { id: 'higher-or-lower-single', name: 'Higher or Lower', image: require('../../assets/images/charizard.png'), page: '/pages/HigherOrLowerSingle', showInModes: ['single'] },
+        // Multiplayer-only: Multiplayer Guess Stat
+        { id: 'multiplayer-guess-stats', name: 'Guess the Stats (Multiplayer)', image: require('../../assets/images/charizard.png'), page: '/pages/MultiplayerGuessStat', showInModes: ['multi'] }
     ];
+
+    // Filter games for current mode
+    const visibleGames = games.filter(g => isMultiplayer ? (g.showInModes || []).includes('multi') : (g.showInModes || []).includes('single'));
+
+    // Debug: ensure the list is as expected in the browser console
+    try { console.debug('visibleGames', visibleGames, 'isMultiplayer', isMultiplayer); } catch (e) { /* ignore */ }
 
     const handleGameSelect = async (gameId: string) => {
         const selectedGame = games.find(g => g.id === gameId);
@@ -66,6 +69,7 @@ export default function ChooseGame() {
                 }
 
                 if (connection && connection.state === SignalR.HubConnectionState.Connected) {
+                    // Tell server which game was selected for the room
                     await connection.invoke('SelectGame', roomCode, gameId, playerName);
 
                     // navigate back so the host returns to the previous screen and keeps the same connection state
@@ -133,7 +137,7 @@ export default function ChooseGame() {
                         {isMultiplayer ? 'Pick a game for everyone to play together!' : 'Pick a game to play!'}
                     </Text>
                     <View style={styles.gamesContainer}>
-                        {games.map((game) => (
+                        {visibleGames.map((game) => (
                             <TouchableOpacity
                                 key={game.id}
                                 style={[styles.gameCard, { alignSelf: 'center' }]}

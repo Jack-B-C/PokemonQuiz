@@ -32,6 +32,13 @@ export default function WaitingRoom() {
         const setup = async () => {
             try {
                 const connection = await ensureConnection(hubUrl);
+                // If connection failed, bail out and inform the user — prevents 'possibly null' TS errors later when using `connection`.
+                if (!connection) {
+                    console.error('Failed to establish SignalR connection in WaitingRoom');
+                    Alert.alert('Connection Error', 'Failed to connect to multiplayer server');
+                    try { router.back(); } catch { }
+                    return;
+                }
                 connectionRef.current = connection;
 
                 // detach previous handlers to avoid duplicates
@@ -154,6 +161,7 @@ export default function WaitingRoom() {
 
                 // Invoke JoinRoom. If name already taken, rehydrate via GetRoomInfo instead of leaving.
                 try {
+                    // connection is guaranteed to be non-null here due to the guard above
                     await connection.invoke("JoinRoom", roomCode, playerName);
                     console.log('JoinRoom invoked successfully');
                 } catch (err: any) {
@@ -176,7 +184,7 @@ export default function WaitingRoom() {
                         }
                     } else {
                         Alert.alert("Connection Error", "Failed to join room");
-                        router.back();
+                        try { router.back(); } catch { }
                     }
                 }
 

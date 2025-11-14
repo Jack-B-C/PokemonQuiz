@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, Image, StyleSheet, ActivityIndicator, Platform, Modal, ScrollView, TouchableOpacity, StatusBar, useWindowDimensions } from 'react-native';
+import { View, Text, Image, StyleSheet, ActivityIndicator, Platform, Modal, ScrollView, TouchableOpacity, StatusBar, useWindowDimensions, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import Navbar from '@/components/Navbar';
@@ -211,6 +211,12 @@ export default function MultiplayerHigherOrLower() {
     if (!roomCode || !playerName) return;
     try {
       const conn = await ensureConnection(hubUrl);
+      if (!conn) {
+        console.error('Failed to establish SignalR connection in MultiplayerHigherOrLower');
+        Alert.alert('Connection Error', 'Failed to connect to multiplayer server');
+        try { router.back(); } catch { }
+        return;
+      }
       connRef.current = conn;
 
       try { conn.off('Question'); } catch {}
@@ -302,6 +308,7 @@ export default function MultiplayerHigherOrLower() {
 
       // initial hydrate
       try {
+        // conn is non-null here
         const info = await conn.invoke('GetRoomInfo', roomCode);
         console.debug('Initial GetRoomInfo result:', info);
         if (info?.players) setPlayers(info.players);

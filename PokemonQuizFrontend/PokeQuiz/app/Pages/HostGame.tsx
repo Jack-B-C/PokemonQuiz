@@ -1,10 +1,10 @@
 ﻿import * as React from "react";
 import { View, Text, StyleSheet, TextInput, Alert, Platform, Button } from "react-native";
-import Navbar from '../../components/Navbar';
-import AppButton from '../../components/AppButton';
+import Navbar from '@/components/Navbar';
+import AppButton from '@/components/AppButton';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import * as SignalR from "@microsoft/signalr";
-import { ensureConnection, getConnection } from '../../utils/signalrClient';
+import { ensureConnection, getConnection } from '@/utils/signalrClient';
 
 export default function HostGame() {
     const router = useRouter();
@@ -37,6 +37,11 @@ export default function HostGame() {
     const initConnectionAndRehydrate = async (hubUrl: string, rc?: string, name?: string) => {
         try {
             const connection = await ensureConnection(hubUrl);
+            if (!connection) {
+                console.error('Failed to establish SignalR connection in HostGame');
+                Alert.alert('Connection Error', 'Failed to connect to multiplayer server');
+                return;
+            }
             connectionRef.current = connection;
 
             // attach handlers (avoid duplicates)

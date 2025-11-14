@@ -1,4 +1,3 @@
-// @ts-nocheck
 import React from "react";
 import { View, Text, StyleSheet, TouchableOpacity, Platform, StatusBar } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -6,13 +5,7 @@ import { colors } from "../styles/colours.js";
 import Icon from "react-native-vector-icons/Ionicons";
 import { router } from 'expo-router';
 
-type Props = {
-    title: string;
-    onBack?: () => void;
-    backTo?: string; // optional path to navigate to instead of history back
-};
-
-export default function Navbar({ title, onBack, backTo }: Props) {
+export default function Navbar({ title, onBack, backTo }) {
     const handleBack = () => {
         if (onBack) {
             onBack();
@@ -21,7 +14,7 @@ export default function Navbar({ title, onBack, backTo }: Props) {
 
         if (backTo) {
             try {
-                router.replace(backTo as any);
+                router.replace(backTo);
                 return;
             } catch {
                 // ignore and fallback to back
@@ -33,7 +26,7 @@ export default function Navbar({ title, onBack, backTo }: Props) {
             router.back();
         } catch {
             // Fallback to root if back fails
-            router.push('/' as any);
+            router.push('/');
         }
     };
 
