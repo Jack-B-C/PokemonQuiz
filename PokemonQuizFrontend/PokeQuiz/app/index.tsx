@@ -1,16 +1,20 @@
-﻿import React, { useRef, useEffect, useState } from "react";
-import { View, Text, StyleSheet, Animated, Dimensions, TouchableOpacity, ActivityIndicator, Platform } from "react-native";
-import { colors } from "../styles/colours";
-import Icon from "react-native-vector-icons/Ionicons";
-import { useRouter } from "expo-router";
+﻿import React, { useRef, useEffect, useState } from 'react';
+import { View, Text, StyleSheet, Animated, Dimensions, TouchableOpacity, ActivityIndicator, Platform } from 'react-native';
+import { colors } from '../styles/colours';
+import Icon from 'react-native-vector-icons/Ionicons';
+import { useRouter } from 'expo-router';
 import { getToken } from '@/utils/tokenStorage';
 
-const { height: screenHeight } = Dimensions.get("window");
+const { height: screenHeight } = Dimensions.get('window');
 
 export default function HomeScreen() {
     const router = useRouter();
     const pulseAnim = useRef(new Animated.Value(1)).current;
     const [checking, setChecking] = useState(false);
+
+    // Container height for reliable centering (avoids initial layout flash)
+    const [containerHeight, setContainerHeight] = useState<number>(screenHeight);
+    const [ready, setReady] = useState(false);
 
     useEffect(() => {
         Animated.loop(
@@ -48,10 +52,32 @@ export default function HomeScreen() {
         }
     };
 
+    const half = containerHeight / 2;
+
+    // onLayout: measure and mark ready to render main UI
+    const onContainerLayout = (e: any) => {
+        const h = e.nativeEvent.layout.height || screenHeight;
+        // Update only if change or not ready
+        if (!ready || Math.abs(h - containerHeight) > 2) {
+            setContainerHeight(h);
+            setReady(true);
+        }
+    };
+
+    // Until ready, render plain background or optional spinner to avoid layout flash
+    if (!ready) {
+        return (
+            <View style={[styles.safeArea, { justifyContent: 'center', alignItems: 'center' }]} onLayout={onContainerLayout}>
+                {/* Minimal loader while measuring/layout stabilizes */}
+                <ActivityIndicator size={48} color={colors.primary} />
+            </View>
+        );
+    }
+
     return (
         <View style={styles.safeArea}>
-            <View style={styles.container}>
-                <View style={styles.topHalf}>
+            <View style={styles.container} onLayout={onContainerLayout}>
+                <View style={[styles.topHalf, { height: half }]}>
                     <Text style={styles.title}>PokeQuiz</Text>
                 </View>
 
@@ -59,12 +85,12 @@ export default function HomeScreen() {
                     <Text style={styles.subtitle}>Test your Pokemon knowledge!</Text>
                 </View>
 
-                <View style={styles.dividerLine} />
+                <View style={[styles.dividerLine, { top: half }]} />
 
-                <Animated.View style={[styles.playButtonWrapper, { transform: [{ scale: pulseAnim }] }]}>
+                <Animated.View style={[styles.playButtonWrapper, { transform: [{ scale: pulseAnim }], top: Math.max(0, half - 95) }]}>
                     <TouchableOpacity
                         style={styles.circleButton}
-                        onPress={() => router.push("/pages/Mode")}
+                        onPress={() => router.push('/pages/Mode')}
                         activeOpacity={0.8}
                     >
                         <Text style={styles.playButtonText}>Play</Text>
@@ -79,7 +105,6 @@ export default function HomeScreen() {
                     {checking ? <ActivityIndicator size={36} color={colors.primary} /> : <Icon name="person-circle-outline" size={40} color={colors.primary} />}
                 </TouchableOpacity>
 
-                
             </View>
         </View>
     );
@@ -93,47 +118,44 @@ const styles = StyleSheet.create({
     container: {
         flex: 1,
         backgroundColor: colors.surface,
-        alignItems: "center",
+        alignItems: 'center',
     },
     topHalf: {
-        width: "100%",
-        height: screenHeight * 0.5,
+        width: '100%',
         backgroundColor: colors.primary,
-        justifyContent: "center",
-        alignItems: "center",
+        justifyContent: 'center',
+        alignItems: 'center',
         paddingTop: 40,
     },
     bottomHalf: {
-        width: "100%",
+        width: '100%',
         flex: 1,
         backgroundColor: colors.surface,
-        justifyContent: "center",
-        alignItems: "center",
+        justifyContent: 'center',
+        alignItems: 'center',
         paddingBottom: 40,
     },
     dividerLine: {
-        position: "absolute",
-        top: screenHeight * 0.5,
+        position: 'absolute',
         left: 0,
         right: 0,
         height: 20,
-        backgroundColor: "black",
+        backgroundColor: 'black',
     },
     title: {
         fontSize: 76,
-        fontWeight: "bold",
+        fontWeight: 'bold',
         color: colors.white,
-        textAlign: "center",
+        textAlign: 'center',
     },
     subtitle: {
         fontSize: 24,
         color: colors.text,
-        textAlign: "center",
+        textAlign: 'center',
         paddingHorizontal: 20,
     },
     playButtonWrapper: {
-        position: "absolute",
-        top: screenHeight * 0.5 - 95,
+        position: 'absolute',
         zIndex: 10,
     },
     circleButton: {
@@ -142,10 +164,10 @@ const styles = StyleSheet.create({
         borderRadius: 95,
         backgroundColor: colors.surface,
         borderWidth: 12,
-        borderColor: "black",
-        justifyContent: "center",
-        alignItems: "center",
-        shadowColor: "#000",
+        borderColor: 'black',
+        justifyContent: 'center',
+        alignItems: 'center',
+        shadowColor: '#000',
         shadowOffset: { width: 0, height: 5 },
         shadowOpacity: 0.3,
         shadowRadius: 10,
@@ -153,36 +175,36 @@ const styles = StyleSheet.create({
     },
     playButtonText: {
         fontSize: 40,
-        fontWeight: "bold",
-        color: "black",
+        fontWeight: 'bold',
+        color: 'black',
     },
     loginButton: {
-        position: "absolute",
+        position: 'absolute',
         top: 30,
         right: 30,
         width: 80,
         height: 80,
         borderRadius: 40,
         backgroundColor: colors.white,
-        justifyContent: "center",
-        alignItems: "center",
-        shadowColor: "#000",
+        justifyContent: 'center',
+        alignItems: 'center',
+        shadowColor: '#000',
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.25,
         shadowRadius: 6,
         elevation: 5,
     },
     leaderboardButton: {
-        position: "absolute",
+        position: 'absolute',
         bottom: 30,
         right: 30,
         width: 80,
         height: 80,
         borderRadius: 40,
         backgroundColor: colors.primary,
-        justifyContent: "center",
-        alignItems: "center",
-        shadowColor: "#000",
+        justifyContent: 'center',
+        alignItems: 'center',
+        shadowColor: '#000',
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.25,
         shadowRadius: 6,
