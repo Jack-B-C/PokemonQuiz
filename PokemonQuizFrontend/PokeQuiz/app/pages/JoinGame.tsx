@@ -35,14 +35,7 @@ export default function JoinGame() {
             return;
         }
 
-        // If not logged in, redirect to Login and then return here
-        const uname = (global as any).username as string | undefined;
-        if (!uname) {
-            // send user to login; after login they should be returned to this page
-            router.push({ pathname: '/pages/Login', params: { returnTo: `/pages/JoinGame?roomCode=${roomCode}` } } as any);
-            return;
-        }
-
+        // Allow anonymous join: do not require login. Proceed to WaitingRoom.
         router.push({
             pathname: "/pages/WaitingRoom",
             params: { roomCode, playerName: trimmed },

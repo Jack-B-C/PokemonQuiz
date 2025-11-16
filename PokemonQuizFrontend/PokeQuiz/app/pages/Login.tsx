@@ -18,6 +18,7 @@ export default function LoginPage() {
     const [confirm, setConfirm] = useState('');
     const [isSigningUp, setIsSigningUp] = useState(signup === 'true');
     const [loading, setLoading] = useState(false);
+    const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
     // use same emulator-friendly host resolution as other pages
     const serverIp = Platform.OS === 'android' ? '10.0.2.2' : 'localhost';
@@ -57,18 +58,33 @@ export default function LoginPage() {
     };
 
     const handleSubmit = async () => {
+        setErrorMessage(null);
+
         if (!username || !password) {
+            setErrorMessage('Username and password are required');
             Alert.alert('Validation', 'Username and password are required');
             return;
         }
 
         if (isSigningUp) {
-            if (!email) { Alert.alert('Validation', 'Email required'); return; }
-            if (password !== confirm) { Alert.alert('Validation', 'Passwords do not match'); return; }
+            if (!email) {
+                setErrorMessage('Email required');
+                Alert.alert('Validation', 'Email required');
+                return;
+            }
+            if (password !== confirm) {
+                setErrorMessage('Passwords do not match');
+                Alert.alert('Validation', 'Passwords do not match');
+                return;
+            }
 
             // client-side password policy check so user sees immediate feedback
             const pwdErr = validatePasswordStrength(password);
-            if (pwdErr) { Alert.alert('Validation', pwdErr); return; }
+            if (pwdErr) {
+                setErrorMessage(pwdErr);
+                Alert.alert('Validation', pwdErr);
+                return;
+            }
 
             setLoading(true);
             try {
@@ -79,22 +95,25 @@ export default function LoginPage() {
                 });
                 if (!res.ok) {
                     const txt = await parseErrorText(res);
+                    setErrorMessage(txt);
+                    Alert.alert('Error', txt);
                     throw new Error(txt || `Register failed (${res.status})`);
                 }
 
                 // Auto-login after successful registration
                 try {
                     await doLogin(username, password);
+                    setErrorMessage(null);
                     Alert.alert('Success', 'Account created and logged in');
                     if (returnTo) router.replace(returnTo as any);
                     else router.replace('/pages/Account');
                 } catch (loginErr: any) {
+                    setErrorMessage(null);
                     Alert.alert('Registered', 'Account created. Please log in.');
                     setIsSigningUp(false);
                 }
             } catch (err: any) {
                 console.warn(err);
-                Alert.alert('Error', err?.message ?? 'Register failed');
             } finally { setLoading(false); }
             return;
         }
@@ -102,11 +121,13 @@ export default function LoginPage() {
         setLoading(true);
         try {
             await doLogin(username, password);
+            setErrorMessage(null);
             if (returnTo) router.replace(returnTo as any);
             else router.replace('/pages/Account');
         } catch (err: any) {
-            console.warn(err);
-            Alert.alert('Error', err?.message ?? 'Login failed');
+            const msg = err?.message ?? 'Login failed';
+            setErrorMessage(msg);
+            Alert.alert('Error', msg);
         } finally { setLoading(false); }
     };
 
@@ -164,6 +185,9 @@ export default function LoginPage() {
 
                     <AppButton label={isSigningUp ? (loading ? 'Creating...' : 'Create account') : (loading ? 'Logging...' : 'Login')} onPress={handleSubmit} style={{ width: '100%', marginTop: 12 }} disabled={loading} />
 
+                    {/* Inline error message for visibility */}
+                    {errorMessage ? <Text style={styles.error}>{errorMessage}</Text> : null}
+
                     <TouchableOpacity onPress={() => setIsSigningUp(s => !s)} style={{ marginTop: 12 }}>
                         <Text style={styles.link}>{isSigningUp ? 'Have an account? Login' : "Don't have an account? Sign up"}</Text>
                     </TouchableOpacity>
@@ -184,5 +208,6 @@ const styles = StyleSheet.create({
     title: { fontSize: 22, fontWeight: '700', marginBottom: 12, color: colors.text, textAlign: 'center' },
     input: { width: '100%', padding: 12, marginVertical: 8, backgroundColor: '#f7f7f7', borderRadius: 8, borderWidth: 1, borderColor: '#eee' },
     label: { marginTop: 6, marginLeft: 2, color: colors.text, fontWeight: '600' },
-    link: { marginTop: 12, color: colors.primary, textDecorationLine: 'underline', textAlign: 'center' }
+    link: { marginTop: 12, color: colors.primary, textDecorationLine: 'underline', textAlign: 'center' },
+    error: { marginTop: 10, color: '#b00020', fontWeight: '600', textAlign: 'center' }
 });
