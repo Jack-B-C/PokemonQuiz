@@ -49,6 +49,49 @@ namespace PokemonQuizAPI.Data
                 conn.Close();
                 _logger.LogInformation("Successfully connected to MySQL; using database storage.");
             }
+            catch (MySqlException mex) when (mex.Number == 1049) // ER_BAD_DB_ERROR - Unknown database
+            {
+                try
+                {
+                    // Try to create the missing database when permissions allow.
+                    var builder = new MySqlConnectionStringBuilder(_connectionString);
+                    var missingDb = builder.Database;
+                    if (!string.IsNullOrWhiteSpace(missingDb))
+                    {
+                        _logger.LogWarning(mex, "Database '{Db}' not found. Attempting to create it.", missingDb);
+
+                        // Connect without database to run CREATE DATABASE
+                        var adminBuilder = new MySqlConnectionStringBuilder(_connectionString) { Database = string.Empty };
+                        using var adminConn = new MySqlConnection(adminBuilder.ConnectionString);
+                        adminConn.Open();
+
+                        var createSql = $"CREATE DATABASE IF NOT EXISTS `{missingDb}` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;";
+                        using (var cmd = new MySqlCommand(createSql, adminConn))
+                        {
+                            cmd.ExecuteNonQuery();
+                        }
+
+                        adminConn.Close();
+                        _logger.LogInformation("Created database '{Db}' (or it already existed).", missingDb);
+
+                        // Try to connect again using original connection string
+                        using var connRetry = new MySqlConnection(_connectionString);
+                        connRetry.Open();
+                        connRetry.Close();
+                        _logger.LogInformation("Successfully connected to MySQL after creating database.");
+                    }
+                    else
+                    {
+                        _logger.LogError(mex, "Database not specified in connection string and connection failed.");
+                        throw new InvalidOperationException("Failed to connect to MySQL using provided connection string.", mex);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to create missing database; ensure the MySQL user has permission to create databases or create it manually.");
+                    throw new InvalidOperationException("Failed to connect to MySQL using provided connection string.", ex);
+                }
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to connect to MySQL using provided connection string. Ensure the database is available and the connection string is correct.");
@@ -90,7 +133,7 @@ namespace PokemonQuizAPI.Data
             return await WithConnectionAsync(async (conn, ct) => await action(conn), CancellationToken.None);
         }
 
-       
+        
         
         private static PokemonData MapPokemonData(MySqlDataReader reader)
         {
