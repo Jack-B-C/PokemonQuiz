@@ -1,3 +1,6 @@
+// Pokémon Quiz — Page: ChooseGame
+// Standard page header added for consistency. No behavior changes.
+
 import * as React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Image, Platform, Alert, Dimensions, StatusBar, ScrollView } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';

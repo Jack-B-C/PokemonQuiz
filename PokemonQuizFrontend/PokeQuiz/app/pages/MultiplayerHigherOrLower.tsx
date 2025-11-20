@@ -1,3 +1,6 @@
+// Pokémon Quiz — Page: MultiplayerHigherOrLower
+// Standard page header added for consistency. No behavior changes.
+
 import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, Image, StyleSheet, ActivityIndicator, Platform, Modal, ScrollView, TouchableOpacity, StatusBar, useWindowDimensions, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';

@@ -1,4 +1,7 @@
-﻿import * as React from "react";
+﻿// Pokémon Quiz — Page: GameOver
+// Standard page header added for consistency. No behavior changes.
+
+import * as React from "react";
 import { View, Text, StyleSheet, Alert, Platform } from "react-native";
 import { colors } from "../../styles/colours";
 import AppButton from "../../components/AppButton";

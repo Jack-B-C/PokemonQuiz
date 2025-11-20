@@ -1,4 +1,7 @@
-﻿import * as React from "react";
+﻿// Pokémon Quiz — Page: HostGame
+// Standard page header added for consistency. No behavior changes.
+
+import * as React from "react";
 import { View, Text, StyleSheet, TextInput, Alert, Platform, Button } from "react-native";
 import Navbar from '@/components/Navbar';
 import AppButton from '@/components/AppButton';

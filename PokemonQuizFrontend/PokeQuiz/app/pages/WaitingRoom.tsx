@@ -1,4 +1,7 @@
-﻿import React, { useState, useEffect, useRef } from "react";
+﻿// Pokémon Quiz — Page: WaitingRoom
+// Standard page header added for consistency. No behavior changes.
+
+import React, { useState, useEffect, useRef } from "react";
 import { View, Text, StyleSheet, FlatList, Alert, Button, Platform } from "react-native";
 import Navbar from "@/components/Navbar";
 import { useRouter, useLocalSearchParams } from "expo-router";

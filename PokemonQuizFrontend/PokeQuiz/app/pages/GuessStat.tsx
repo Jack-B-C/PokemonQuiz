@@ -1,4 +1,7 @@
-﻿import React, { useState, useEffect } from "react";
+﻿// Pokémon Quiz — Page: GuessStat
+// Standard page header added for consistency. No behavior changes.
+
+import React, { useState, useEffect } from "react";
 import {
     View,
     Text,

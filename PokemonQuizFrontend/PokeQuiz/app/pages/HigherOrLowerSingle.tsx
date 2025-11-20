@@ -1,3 +1,6 @@
+// Pokémon Quiz — Page: HigherOrLowerSingle
+// Standard page header added for consistency. No behavior changes.
+
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, Image, StyleSheet, Platform, ActivityIndicator, Alert, TouchableOpacity, StatusBar, ScrollView, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';

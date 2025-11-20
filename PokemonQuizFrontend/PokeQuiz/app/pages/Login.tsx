@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, TextInput, StyleSheet, TouchableOpacity, Alert, KeyboardAvoidingView, Platform } from 'react-native';
 import { colors } from '../../styles/colours';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -6,12 +6,19 @@ import Navbar from '@/components/Navbar';
 import AppButton from '@/components/AppButton';
 import { getToken, setToken, clearToken } from '@/utils/tokenStorage';
 
+// Login / Signup page for the Pokémon Quiz app.
+// Responsibilities:
+// - Allow users to login or register
+// - Validate input on the client for faster feedback
+// - Persist token via `tokenStorage` utility
+// NOTE: Token/state storage strategy should be reviewed for production (secure storage, HTTPS, refresh tokens).
 export default function LoginPage() {
     const router = useRouter();
     const params = useLocalSearchParams();
     const returnTo = (params as any).returnTo as string | undefined;
     const signup = (params as any).signup as string | undefined;
 
+    // Form state
     const [username, setUsername] = useState('');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
@@ -20,21 +27,23 @@ export default function LoginPage() {
     const [loading, setLoading] = useState(false);
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-    // use same emulator-friendly host resolution as other pages
+    // Use emulator-friendly host for Android emulators; use localhost on other platforms.
     const serverIp = Platform.OS === 'android' ? '10.0.2.2' : 'localhost';
     const apiBase = `http://${serverIp}:5168`;
 
+    // Parse response body to present useful error messages. Always try JSON first, then text.
     const parseErrorText = async (res: Response) => {
         try {
             const json = await res.json();
-            if (json && json.message) return json.message;
+            if (json && (json.message || json.error)) return json.message ?? json.error;
             return JSON.stringify(json);
         } catch {
             try { return await res.text(); } catch { return 'Request failed'; }
         }
     };
 
-    const doLogin = async (uname: string, pwd: string) => {
+    // Perform login request and persist token using tokenStorage.
+    const doLogin = useCallback(async (uname: string, pwd: string) => {
         const res = await fetch(`${apiBase}/api/auth/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -45,41 +54,59 @@ export default function LoginPage() {
             throw new Error(err || `Login failed (${res.status})`);
         }
         const data = await res.json();
+        // NOTE: Storing token on global is a quick convenience for development only.
+        // In production, prefer secure storage and avoid global mutable state.
         (global as any).userToken = data.token;
         (global as any).userId = data.userId;
         (global as any).username = uname;
         await setToken(data.token);
-    };
+    }, [apiBase]);
 
+    // Basic client-side password strength check to give fast feedback to users.
     const validatePasswordStrength = (pwd: string) => {
         if (!pwd || pwd.length < 8) return 'Password must be at least 8 characters';
         if (!/[A-Za-z]/.test(pwd) || !/[0-9]/.test(pwd)) return 'Password must include letters and numbers';
         return null;
     };
 
-    const handleSubmit = async () => {
+    // Basic email validation regex (simple sanity check, not exhaustive).
+    const isValidEmail = (em: string) => {
+        return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em);
+    };
+
+    // Submit handler: handles both login and sign-up flows.
+    const handleSubmit = useCallback(async () => {
         setErrorMessage(null);
 
-        if (!username || !password) {
+        // Trim inputs to prevent accidental whitespace issues.
+        const uname = username.trim();
+        const pwd = password;
+        const mail = email.trim();
+
+        if (!uname || !pwd) {
             setErrorMessage('Username and password are required');
             Alert.alert('Validation', 'Username and password are required');
             return;
         }
 
         if (isSigningUp) {
-            if (!email) {
+            if (!mail) {
                 setErrorMessage('Email required');
                 Alert.alert('Validation', 'Email required');
                 return;
             }
-            if (password !== confirm) {
+            if (!isValidEmail(mail)) {
+                setErrorMessage('Please enter a valid email address');
+                Alert.alert('Validation', 'Please enter a valid email address');
+                return;
+            }
+            if (pwd !== confirm) {
                 setErrorMessage('Passwords do not match');
                 Alert.alert('Validation', 'Passwords do not match');
                 return;
             }
 
-            // client-side password policy check so user sees immediate feedback
-            const pwdErr = validatePasswordStrength(password);
+            const pwdErr = validatePasswordStrength(pwd);
             if (pwdErr) {
                 setErrorMessage(pwdErr);
                 Alert.alert('Validation', pwdErr);
@@ -91,7 +118,7 @@ export default function LoginPage() {
                 const res = await fetch(`${apiBase}/api/auth/register`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username, email, password })
+                    body: JSON.stringify({ username: uname, email: mail, password: pwd })
                 });
                 if (!res.ok) {
                     const txt = await parseErrorText(res);
@@ -102,7 +129,7 @@ export default function LoginPage() {
 
                 // Auto-login after successful registration
                 try {
-                    await doLogin(username, password);
+                    await doLogin(uname, pwd);
                     setErrorMessage(null);
                     Alert.alert('Success', 'Account created and logged in');
                     if (returnTo) router.replace(returnTo as any);
@@ -118,9 +145,10 @@ export default function LoginPage() {
             return;
         }
 
+        // Login flow
         setLoading(true);
         try {
-            await doLogin(username, password);
+            await doLogin(uname, pwd);
             setErrorMessage(null);
             if (returnTo) router.replace(returnTo as any);
             else router.replace('/pages/Account');
@@ -129,17 +157,23 @@ export default function LoginPage() {
             setErrorMessage(msg);
             Alert.alert('Error', msg);
         } finally { setLoading(false); }
-    };
+    }, [username, password, email, confirm, isSigningUp, apiBase, doLogin, returnTo, router]);
 
     useEffect(() => {
-        // If a token exists, verify it and redirect to Account (or returnTo)
+        // If a token exists, verify it and redirect to Account (or returnTo).
+        // Use AbortController to avoid updating state after unmount.
+        const controller = new AbortController();
+        let isMounted = true;
+
         (async () => {
             const token = await getToken();
             if (!token) return;
             try {
-                const res = await fetch(`${apiBase}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` } });
+                const res = await fetch(`${apiBase}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal });
+                if (!isMounted) return;
                 if (res.ok) {
                     const js = await res.json();
+                    // Save minimal user info for session behaviour. Consider secure alternatives in production.
                     (global as any).username = js.username;
                     (global as any).userId = js.id;
                     (global as any).userToken = token;
@@ -150,11 +184,16 @@ export default function LoginPage() {
                     await clearToken();
                 }
             } catch (e) {
-                // ignore
-                await clearToken();
+                // If aborted or network error, clear token to force fresh login on next attempt.
+                try { await clearToken(); } catch { /* ignore */ }
             }
         })();
-    }, []);
+
+        return () => {
+            isMounted = false;
+            controller.abort();
+        };
+    }, [apiBase, returnTo, router]);
 
     return (
         <View style={styles.container}>

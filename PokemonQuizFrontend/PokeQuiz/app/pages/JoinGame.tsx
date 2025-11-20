@@ -1,4 +1,7 @@
-﻿import React, { useState, useEffect } from "react";
+﻿// Pokémon Quiz — Page: JoinGame
+// Standard page header added for consistency. No behavior changes.
+
+import React, { useState, useEffect } from "react";
 import { View, Text, StyleSheet, TextInput, Alert } from "react-native";
 import { colors } from "../../styles/colours";
 import Navbar from "@/components/Navbar";

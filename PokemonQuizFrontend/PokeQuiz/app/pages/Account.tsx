@@ -1,3 +1,6 @@
+// Pokémon Quiz — Page: Account
+// Standard page header added for consistency. No behavior changes.
+
 import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ActivityIndicator, Alert, TouchableOpacity, Linking, Platform, ScrollView } from 'react-native';
 import Navbar from '@/components/Navbar';
